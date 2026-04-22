@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chatty-lora</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Standalone sister tool for Chatty-art</p>
+          <h1>Chatty-lora</h1>
+          <p class="hero-copy">
+            A local LoRA builder dashboard for respectful training-material search, dataset
+            curation, and guided Wan/Musubi training handoffs.
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-pill">Rust chassis</div>
+          <div class="status-pill">Source registry</div>
+          <div class="status-pill" id="runtimePill">Scanning runtime...</div>
+        </div>
+      </header>
+
+      <nav class="mode-bar">
+        <button class="mode-button active" data-page="materials">Materials</button>
+        <button class="mode-button" data-page="builder">Builder</button>
+      </nav>
+
+      <main class="workspace">
+        <section class="workspace-main">
+        <section class="page active" id="materialsPage">
+          <div class="page-grid">
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Source Registry</p>
+                  <h2>Choose the sites to search</h2>
+                </div>
+                <button class="secondary-button" id="refreshButton">Refresh scan</button>
+              </div>
+
+              <label class="field-block">
+                <span class="field-title">Search term or browse mode</span>
+                <input
+                  id="webSearchInput"
+                  type="text"
+                  placeholder="e.g. vintage uniforms, rainforest frog, or leave blank to browse"
+                />
+                <span class="field-help">Leave this blank to ask selected sources for their first available media pages.</span>
+              </label>
+
+              <div class="search-media-row">
+                <span class="field-title">Media to search</span>
+                <div class="media-toggle-group" id="searchMediaToggleGroup">
+                  <button class="media-toggle active" type="button" data-search-media="image">Images</button>
+                  <button class="media-toggle active" type="button" data-search-media="video">Video</button>
+                  <button class="media-toggle" type="button" data-search-media="audio">Audio</button>
+                </div>
+                <p class="muted-copy media-filter-note">
+                  Sources are still chosen below; these buttons decide which media types Chatty-lora asks them for.
+                </p>
+              </div>
+
+              <div class="inline-actions">
+                <button class="primary-button" id="runSearchButton">Search / browse selected sources</button>
+                <button class="secondary-button" id="cancelSearchButton">Cancel search</button>
+                <button class="secondary-button" id="clearSearchButton">Clear search</button>
+                <span class="inline-note" id="searchWindowNote">Loads search or browse results in polite 3-page batches.</span>
+              </div>
+
+              <div class="summary-grid" id="materialSummaryGrid"></div>
+
+              <div class="source-section">
+                <div class="section-heading-row">
+                  <h3>Bundled and custom sources</h3>
+                  <span class="section-note" id="sourceRegistrySummary">Loading source list...</span>
+                </div>
+                <div class="source-list" id="sourceRegistryList"></div>
+              </div>
+
+              <div class="source-section">
+                <div class="section-heading-row">
+                  <h3>Add a custom source</h3>
+                  <span class="section-note">Stored locally in config/sources.json</span>
+                </div>
+
+                <div class="builder-settings-grid">
+                  <label class="field-block compact">
+                    <span class="field-title">Source name</span>
+                    <input id="customSourceNameInput" type="text" placeholder="My gallery" />
+                  </label>
+                  <label class="field-block compact">
+                    <span class="field-title">Base or search URL</span>
+                    <input
+                      id="customSourceUrlInput"
+                      type="text"
+                      placeholder="https://example.com/search?q={query}&page={page}"
+                    />
+                  </label>
+                  <label class="field-block compact">
+                    <span class="field-title">Adapter type</span>
+                    <select id="customSourceAdapterSelect">
+                      <option value="generic_gallery_html">Generic gallery HTML (adapter scaffold)</option>
+                      <option value="openverse_images">Openverse images</option>
+                      <option value="openverse_audio">Openverse audio</option>
+                      <option value="wikimedia_commons">Wikimedia Commons</option>
+                    </select>
+                  </label>
+                  <label class="field-block compact">
+                    <span class="field-title">Media capability</span>
+                    <select id="customSourceMediaSelect">
+                      <option value="image">Image</option>
+                      <option value="video">Video</option>
+                      <option value="audio">Audio</option>
+                      <option value="mixed">Mixed</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="inline-actions">
+                  <button class="secondary-button" id="addCustomSourceButton">Add custom source</button>
+                  <button class="secondary-button" id="clearCustomSourceButton">Clear form</button>
+                </div>
+              </div>
+
+              <div class="source-section">
+                <div class="section-heading-row">
+                  <div>
+                    <h3>Scoped site-fix shell</h3>
+                    <span class="section-note">One source, one adapter file, no crawler-core sprawl.</span>
+                  </div>
+                </div>
+
+                <div class="builder-settings-grid">
+                  <label class="field-block compact">
+                    <span class="field-title">Source entry</span>
+                    <select id="siteFixSourceSelect"></select>
+                  </label>
+                  <div class="inline-actions compact source-fix-actions">
+                    <button class="secondary-button" id="siteFixInspectButton">Open source shell</button>
+                    <button class="secondary-button" id="siteFixCloseButton">Close shell</button>
+                  </div>
+                </div>
+
+                <div class="note-panel" id="siteFixScopePanel">
+                  <p>Select a source to inspect its adapter scope and local fix brief.</p>
+                </div>
+
+                <label class="field-block">
+                  <span class="field-title">Issue summary</span>
+                  <textarea
+                    id="siteFixIssueSummary"
+                    rows="3"
+                    placeholder="What broke? Empty results, wrong media link, pagination drift, bad thumbnails..."
+                  ></textarea>
+                </label>
+
+                <label class="field-block">
+                  <span class="field-title">Reproduction notes</span>
+                  <textarea
+                    id="siteFixReproductionNotes"
+                    rows="4"
+                    placeholder="Search term, page number, what you expected, and what actually happened."
+                  ></textarea>
+                </label>
+
+                <label class="field-block">
+                  <span class="field-title">Patch notes / selector ideas</span>
+                  <textarea
+                    id="siteFixPatchNotes"
+                    rows="5"
+                    placeholder="Keep this scoped to the selected source adapter file only."
+                  ></textarea>
+                </label>
+
+                <div class="inline-actions">
+                  <button class="secondary-button" id="siteFixProposeButton">Draft scoped fix proposal</button>
+                  <button class="secondary-button" id="siteFixReviewApplyButton">Review proposed fix</button>
+                  <button class="primary-button" id="siteFixApplyMainButton">Apply proposed fix</button>
+                  <button class="primary-button" id="siteFixSaveButton">Save site-fix brief</button>
+                  <button class="secondary-button" id="siteFixClearButton">Clear brief</button>
+                  <span class="inline-note" id="siteFixStatusNote">This writes a local source-specific brief under config/source-fixes/.</span>
+                </div>
+
+                <div class="note-panel site-fix-proposal-panel" id="siteFixProposalPanel">
+                  <p>Draft a proposal to review a source-specific adapter fix before anything is edited.</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="card wide-card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Preview Results</p>
+                  <h2>Respectful batched search previews</h2>
+                </div>
+                <div class="inline-actions compact">
+                  <button class="secondary-button" id="previousBatchButton">Previous 3 pages</button>
+                  <button class="secondary-button" id="nextBatchButton">Next 3 pages</button>
+                </div>
+              </div>
+
+              <div class="note-panel preview-meta" id="searchMetaPanel">
+                <p>Run a search to preview pages 1 to 3 from the selected sources.</p>
+              </div>
+
+              <div class="preview-actions-card">
+                <label class="field-block compact preview-dataset-field">
+                  <span class="field-title">Dataset folder name</span>
+                  <input
+                    id="datasetNameInput"
+                    type="text"
+                    placeholder="e.g. kookaburra-reference-set"
+                  />
+                </label>
+                <div class="inline-actions">
+                  <button class="primary-button" id="curateSelectionButton">Curate selected into dataset</button>
+                  <span class="inline-note" id="curationStatusNote">Select preview items, then let Chatty-lora do the download and naming grunt work.</span>
+                </div>
+              </div>
+
+              <div class="selection-tray-card">
+                <div class="section-heading-row">
+                  <div>
+                    <h3>Selection tray</h3>
+                    <p class="muted-copy" id="selectionTraySummary">
+                      Selected preview items will gather here before curation.
+                    </p>
+                  </div>
+                  <button class="secondary-button" id="clearSelectionButton">Clear selection</button>
+                </div>
+                <div class="selection-tray-list" id="selectionTrayList">
+                  <div class="empty-state">
+                    Tick preview items and they will appear here as a lightweight review step before download.
+                  </div>
+                </div>
+              </div>
+
+              <div class="preview-batches" id="searchPreviewResults">
+                <div class="empty-state">
+                  Search previews will land here in grouped 3-page batches so the app stays punchy
+                  and kind to source sites.
+                </div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Input Tray</p>
+                  <h2>Current working library</h2>
+                </div>
+              </div>
+
+              <label class="field-block">
+                <span class="field-title">Search local files</span>
+                <input
+                  id="materialsSearchInput"
+                  type="text"
+                  placeholder="Search filenames across inputs, outputs, and models..."
+                />
+              </label>
+
+              <div class="note-panel local-import-panel">
+                <p class="summary-title">Local folder cleanup</p>
+                <h3>Turn a jumble folder into a clean dataset</h3>
+                <p class="muted-copy">
+                  Pick a folder you manually dropped into inputs/. Chatty-lora copies it into a new
+                  dataset with predictable names, media buckets, sidecar captions, and metadata.
+                  Your original folder is left alone.
+                </p>
+                <div class="builder-settings-grid">
+                  <label class="field-block compact">
+                    <span class="field-title">Jumble folder</span>
+                    <select id="localImportSourceSelect"></select>
+                  </label>
+                  <label class="field-block compact">
+                    <span class="field-title">Clean dataset name</span>
+                    <input
+                      id="localImportDatasetNameInput"
+                      type="text"
+                      placeholder="e.g. leather-journal-covers-clean"
+                    />
+                  </label>
+                </div>
+                <div class="inline-actions">
+                  <button class="primary-button" id="localImportDatasetButton">Clean folder into dataset</button>
+                  <span class="inline-note" id="localImportStatusNote">
+                    Drop a folder into inputs/, refresh scan, then clean it here.
+                  </span>
+                </div>
+              </div>
+
+              <div class="tray-columns">
+                <div class="tray-column">
+                  <h3>Inputs</h3>
+                  <div class="tray-list" id="inputsList"></div>
+                </div>
+                <div class="tray-column">
+                  <h3>Outputs</h3>
+                  <div class="tray-list" id="outputsList"></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Model Library</p>
+                  <h2>Base models and helper weights</h2>
+                </div>
+              </div>
+              <div class="tray-list models-list" id="modelsList"></div>
+            </section>
+
+            <section class="card wide-card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Runtime</p>
+                  <h2>Local readiness</h2>
+                </div>
+              </div>
+              <div class="runtime-grid" id="runtimeGrid"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" id="builderPage">
+          <div class="page-grid builder-grid">
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Training Plan</p>
+                  <h2>Project setup</h2>
+                </div>
+                <div class="status-pill soft">Setup stage</div>
+              </div>
+
+              <div class="note-panel plan-state-panel" id="builderPlanStatePanel">
+                <p>Editing a fresh training plan. Saved plan cards below are the things the runner can actually launch.</p>
+              </div>
+
+              <label class="field-block">
+                <span class="field-title">Project name</span>
+                <input id="projectNameInput" type="text" />
+                <span class="field-help">This becomes the saved plan name and output folder slug.</span>
+              </label>
+
+              <label class="field-block">
+                <span class="field-title">Curated dataset</span>
+                <select id="datasetSelect"></select>
+                <span class="field-help">Pick the cleaned folder of training material you want this LoRA to learn from.</span>
+              </label>
+
+              <label class="field-block">
+                <span class="field-title">Base model</span>
+                <select id="baseModelSelect"></select>
+                <span class="field-help">The foundation model this LoRA will attach to later.</span>
+              </label>
+
+              <label class="field-block">
+                <span class="field-title">Training backend</span>
+                <select id="trainingBackendSelect"></select>
+                <span class="field-help">The trainer family and script format Chatty-lora will prepare for.</span>
+              </label>
+
+              <div class="builder-settings-grid">
+                <label class="field-block compact">
+                  <span class="field-title">Concept type</span>
+                  <select id="conceptTypeSelect">
+                    <option value="style">Style / aesthetic</option>
+                    <option value="character">Character / person</option>
+                    <option value="motion">Motion / action</option>
+                    <option value="object">Object / product</option>
+                    <option value="location">Location / environment</option>
+                    <option value="assistant">Assistant / persona</option>
+                  </select>
+                  <span class="field-help" id="conceptTypeHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Training preset</span>
+                  <select id="trainingPresetSelect">
+                    <option value="balanced" selected>Balanced starter</option>
+                    <option value="identity-strong">Identity strong</option>
+                    <option value="style-lite">Style light touch</option>
+                    <option value="fast-test">Fast test pass</option>
+                  </select>
+                  <span class="field-help" id="trainingPresetHelp"></span>
+                </label>
+              </div>
+
+              <label class="field-block">
+                <span class="field-title">Trigger phrase</span>
+                <input
+                  id="triggerPhraseInput"
+                  type="text"
+                  placeholder="e.g. chatty_lora_style"
+                />
+                <span class="field-help">Use a short rare phrase. This is the handle you prompt with later to call the LoRA.</span>
+              </label>
+
+              <label class="field-block">
+                <span class="field-title">Concept summary</span>
+                <textarea
+                  id="conceptSummaryInput"
+                  rows="5"
+                  placeholder="Describe the concept, subject, style, or assistant persona this LoRA should learn."
+                ></textarea>
+                <span class="field-help">Say what should stay consistent. Avoid stuffing in unrelated hopes and dreams just yet.</span>
+              </label>
+
+              <label class="field-block">
+                <span class="field-title">Caption strategy</span>
+                <select id="captionStrategySelect">
+                  <option value="source-title" selected>Use source titles where available</option>
+                  <option value="filename-only">Use filenames only</option>
+                  <option value="manual-later">Manual captions later</option>
+                </select>
+                <span class="field-help" id="captionStrategyHelp"></span>
+              </label>
+
+              <div class="note-panel builder-explainer-panel" id="builderPlanExplanationPanel">
+                <p>Choose a dataset and concept type to see a plain-English readout before saving.</p>
+              </div>
+
+              <div class="inline-actions">
+                <button class="primary-button" id="prepareProjectButton">Save training plan</button>
+                <span class="inline-note" id="prepareProjectNote">Save a reusable local plan and generate manual handoff scripts for supported trainer lanes.</span>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Training Settings</p>
+                  <h2>Beginner starting point</h2>
+                </div>
+              </div>
+
+              <div class="builder-settings-grid">
+                <label class="field-block compact">
+                  <span class="field-title">Rank</span>
+                  <input id="rankInput" type="number" min="4" max="256" step="4" value="8" />
+                  <span class="field-help" id="rankHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Repeats</span>
+                  <input id="repeatsInput" type="number" min="1" max="100" value="1" />
+                  <span class="field-help" id="repeatsHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Epochs</span>
+                  <input id="epochsInput" type="number" min="1" max="100" value="1" />
+                  <span class="field-help" id="epochsHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Training resolution</span>
+                  <select id="resolutionSelect">
+                    <option selected>512</option>
+                    <option>768</option>
+                    <option>1024</option>
+                  </select>
+                  <span class="field-help" id="resolutionHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Batch size</span>
+                  <input id="batchSizeInput" type="number" min="1" max="16" value="1" />
+                  <span class="field-help" id="batchSizeHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Learning rate</span>
+                  <input id="learningRateInput" type="number" min="0.000001" max="0.01" step="0.00001" value="0.0001" />
+                  <span class="field-help" id="learningRateHelp"></span>
+                </label>
+                <label class="field-block compact">
+                  <span class="field-title">Validation split %</span>
+                  <input id="validationSplitInput" type="number" min="0" max="40" step="1" value="0" />
+                  <span class="field-help" id="validationSplitHelp"></span>
+                </label>
+              </div>
+
+              <div class="note-panel builder-explainer-panel" id="builderSettingsExplanationPanel">
+                <p>Adjust the settings to see a hardware-pressure and training-behavior readout.</p>
+              </div>
+
+              <div class="note-panel">
+                <h3>Low-VRAM first pass</h3>
+                <p>
+                  The visible defaults match the first proven Wan smoke test:
+                  512px, 17 frames, rank 8, batch 1, one epoch. Raise these only
+                  after the tiny run works on your hardware.
+                </p>
+              </div>
+
+              <div class="note-panel">
+                <h3>Current chassis status</h3>
+                <ul id="builderStatusList" class="bullet-list"></ul>
+              </div>
+
+              <div class="note-panel">
+                <h3>Starter notes</h3>
+                <ul id="builderNotesList" class="bullet-list"></ul>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Training Backend</p>
+                  <h2>What can train on this machine</h2>
+                </div>
+              </div>
+              <div class="prepared-projects-list" id="trainingBackendList"></div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Wan Preflight</p>
+                  <h2>First real training lane</h2>
+                </div>
+                <div class="status-pill soft">Musubi + WSL</div>
+              </div>
+              <div id="wanTrainingStatus"></div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Selected Dataset</p>
+                  <h2>What this dataset contains</h2>
+                </div>
+              </div>
+              <div class="summary-grid" id="builderDatasetSummary"></div>
+              <div id="builderDatasetPreflight"></div>
+              <div class="curated-datasets-list" id="curatedDatasetsList"></div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div>
+                  <p class="card-kicker">Saved Training Plans</p>
+                  <h2>Reuse or revisit previous setups</h2>
+                </div>
+              </div>
+              <div class="prepared-projects-list" id="preparedProjectsList"></div>
+            </section>
+          </div>
+        </section>
+        </section>
+
+        <aside class="card helper-shell">
+          <div class="card-header">
+            <div>
+              <p class="card-kicker">Helper Chat</p>
+              <h2>Ask while you work</h2>
+            </div>
+            <div class="status-pill soft">Page-aware</div>
+          </div>
+
+          <div class="note-panel helper-context">
+            <h3>Current context</h3>
+            <p id="helperContextTitle">
+              The helper will watch your current page and settings so it can answer with local context instead of generic filler.
+            </p>
+          </div>
+
+          <div class="helper-messages" id="helperMessages">
+            <article class="helper-message assistant">
+              <div class="helper-message-meta">Helper</div>
+              <p>
+                I’m here to help with respectful sourcing, dataset curation, and Builder settings.
+                Ask what looks off and we’ll work through it together.
+              </p>
+            </article>
+          </div>
+
+          <div class="helper-quick-actions" id="helperQuickActions"></div>
+
+          <label class="field-block helper-input-block">
+            <span class="field-title">Ask the helper</span>
+            <textarea
+              id="helperInput"
+              rows="4"
+              placeholder="e.g. Is this enough material for a style LoRA? or Why did this search return nothing?"
+            ></textarea>
+          </label>
+
+          <div class="inline-actions">
+            <button class="primary-button" id="helperSendButton">Ask helper</button>
+            <span class="inline-note">Starts with local page-aware guidance. Runtime-backed help can come later.</span>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

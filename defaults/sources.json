@@ -1,0 +1,41 @@
+[
+  {
+    "id": "openverse-images",
+    "name": "Openverse Images",
+    "base_url": "https://api.openverse.org/v1/images/",
+    "adapter_kind": "openverse_images",
+    "media_kind": "image",
+    "enabled": true,
+    "user_added": false,
+    "crawl_delay_ms": 1200,
+    "pages_per_batch": 3,
+    "respect_robots_txt": true,
+    "notes": "Free-use image search via the public Openverse API."
+  },
+  {
+    "id": "wikimedia-commons",
+    "name": "Wikimedia Commons",
+    "base_url": "https://commons.wikimedia.org/w/api.php",
+    "adapter_kind": "wikimedia_commons",
+    "media_kind": "image",
+    "enabled": true,
+    "user_added": false,
+    "crawl_delay_ms": 1500,
+    "pages_per_batch": 3,
+    "respect_robots_txt": true,
+    "notes": "Public media repository with image search routed through the Wikimedia API."
+  },
+  {
+    "id": "openverse-audio",
+    "name": "Openverse Audio",
+    "base_url": "https://api.openverse.org/v1/audio/",
+    "adapter_kind": "openverse_audio",
+    "media_kind": "audio",
+    "enabled": false,
+    "user_added": false,
+    "crawl_delay_ms": 1200,
+    "pages_per_batch": 3,
+    "respect_robots_txt": true,
+    "notes": "Free-use audio search via the public Openverse API."
+  }
+]
