@@ -143,6 +143,8 @@ fn answer_builder(question: String, context: Option<BuilderHelperContext>) -> He
         prepared_project_count: 0,
         project_name: String::new(),
         base_model: String::new(),
+        base_model_family_id: None,
+        base_model_family_label: None,
         training_backend_id: "kohya_ss".to_string(),
         concept_type: "style".to_string(),
         training_preset: "balanced".to_string(),
@@ -161,9 +163,22 @@ fn answer_builder(question: String, context: Option<BuilderHelperContext>) -> He
         .selected_dataset_slug
         .clone()
         .unwrap_or_else(|| "no dataset selected yet".to_string());
+    let base_model_family_id = context
+        .base_model_family_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let base_model_family = context
+        .base_model_family_label
+        .clone()
+        .unwrap_or_else(|| "unknown family".to_string());
     let context_title = format!(
-        "Builder helper is looking at dataset \"{}\", backend \"{}\", concept type \"{}\", and preset \"{}\".",
-        dataset_label, context.training_backend_id, context.concept_type, context.training_preset
+        "Builder helper is looking at dataset \"{}\", backend \"{}\", base-model family \"{}\" ({}), concept type \"{}\", and preset \"{}\".",
+        dataset_label,
+        context.training_backend_id,
+        base_model_family,
+        base_model_family_id,
+        context.concept_type,
+        context.training_preset
     );
 
     let answer = if context.selected_dataset_slug.is_none() {
@@ -195,8 +210,8 @@ fn answer_builder(question: String, context: Option<BuilderHelperContext>) -> He
                 .to_string()
         } else {
             format!(
-                "Your trigger phrase wants to be the clean recall handle for project \"{}\". The best trigger phrases are distinctive and boring: short tokens that do not already have heavy meaning in the base model.",
-                context.project_name
+                "Your trigger phrase wants to be the clean recall handle for project \"{}\". The best trigger phrases are distinctive and boring: short tokens that do not already have heavy meaning in the base model, especially once you settle on a {} family base.",
+                context.project_name, base_model_family
             )
         }
     } else if lowered.contains("caption") {
@@ -242,12 +257,13 @@ fn answer_builder(question: String, context: Option<BuilderHelperContext>) -> He
         )
     } else {
         format!(
-            "The Builder page is now at the training-handoff stage: choose the curated dataset, pick a backend target, name the concept clearly, choose the base model, then lock in a sensible starting setup. For the Wan/Musubi lane, saved plans generate manual WSL scripts rather than launching training from the browser. You are currently pointing at base model \"{}\" through backend \"{}\" with {}px resolution, batch size {}, learning rate {}, and validation split {}%. You already have {} saved training plan{} here.",
+            "The Builder page is now at the training-handoff stage: choose the curated dataset, pick a backend target, name the concept clearly, choose the base model, then lock in a sensible starting setup. For the Wan/Musubi lane, saved plans generate manual WSL scripts rather than launching training from the browser. You are currently pointing at base model \"{}\" from the {} family through backend \"{}\" with {}px resolution, batch size {}, learning rate {}, and validation split {}%. You already have {} saved training plan{} here.",
             if context.base_model.is_empty() {
                 "none selected yet"
             } else {
                 &context.base_model
             },
+            base_model_family,
             context.training_backend_id,
             context.resolution.unwrap_or(768),
             context.batch_size.unwrap_or(1),

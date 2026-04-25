@@ -51,6 +51,8 @@ pub struct BuilderHelperContext {
     pub prepared_project_count: usize,
     pub project_name: String,
     pub base_model: String,
+    pub base_model_family_id: Option<String>,
+    pub base_model_family_label: Option<String>,
     pub training_backend_id: String,
     pub concept_type: String,
     pub training_preset: String,
@@ -87,7 +89,7 @@ pub struct MaterialPanel {
 #[derive(Debug, Serialize)]
 pub struct BuilderPanel {
     pub project_name_suggestion: String,
-    pub base_model_options: Vec<String>,
+    pub base_model_options: Vec<BaseModelOption>,
     pub training_backends: Vec<TrainingBackendSummary>,
     pub recommended_training_backend_id: Option<String>,
     pub wan_training: WanTrainingStatus,
@@ -96,6 +98,15 @@ pub struct BuilderPanel {
     pub prepared_projects: Vec<PreparedProjectSummary>,
     pub status_lines: Vec<String>,
     pub starter_notes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct BaseModelOption {
+    pub value: String,
+    pub label: String,
+    pub family_id: String,
+    pub family_label: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,9 +166,11 @@ pub struct PreparedProjectSummary {
     pub dataset_slug: String,
     pub base_model: String,
     pub training_backend_id: String,
+    pub backend_selection_manually_overridden: bool,
     pub trigger_phrase: String,
     pub concept_summary: String,
     pub concept_type: String,
+    pub concept_blocks: Vec<BuilderConceptBlock>,
     pub training_preset: String,
     pub caption_strategy: String,
     pub resolution: u32,
@@ -168,6 +181,20 @@ pub struct PreparedProjectSummary {
     pub learning_rate: f32,
     pub validation_split_percent: u32,
     pub created_unix_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuilderConceptBlock {
+    #[serde(default = "default_concept_block_role")]
+    pub role: String,
+    pub concept_type: String,
+    pub trigger_phrase: String,
+    pub concept_summary: String,
+    pub training_intent: String,
+}
+
+fn default_concept_block_role() -> String {
+    "primary".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -190,6 +217,11 @@ pub struct TrainingBackendSummary {
     pub name: String,
     pub description: String,
     pub best_for: String,
+    pub lane_label: Option<String>,
+    pub lane_dataset_kind: Option<String>,
+    pub lane_task: Option<String>,
+    pub compatible_family_ids: Vec<String>,
+    pub compatible_family_labels: Vec<String>,
     pub ready: bool,
     pub relative_path: Option<String>,
     pub notes: Vec<String>,
@@ -249,6 +281,22 @@ pub struct ModelSummary {
     pub safetensors: usize,
     pub checkpoints: usize,
     pub other: usize,
+    pub families: Vec<ModelFamilySummary>,
+    pub items: Vec<ModelItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelFamilySummary {
+    pub id: String,
+    pub label: String,
+    pub purpose: String,
+    pub included_in_training_base_model_picker: bool,
+    pub relative_root: String,
+    pub total: usize,
+    pub gguf: usize,
+    pub safetensors: usize,
+    pub checkpoints: usize,
+    pub other: usize,
     pub items: Vec<ModelItem>,
 }
 
@@ -268,10 +316,12 @@ pub struct LibraryItem {
     pub bytes: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ModelItem {
     pub name: String,
     pub kind: String,
+    pub family_id: String,
+    pub family_label: String,
     pub relative_path: String,
 }
 
@@ -499,9 +549,13 @@ pub struct BuilderPrepareRequest {
     pub dataset_slug: String,
     pub base_model: String,
     pub training_backend_id: String,
+    #[serde(default)]
+    pub backend_selection_manually_overridden: bool,
     pub trigger_phrase: String,
     pub concept_summary: String,
     pub concept_type: String,
+    #[serde(default)]
+    pub concept_blocks: Vec<BuilderConceptBlock>,
     pub training_preset: String,
     pub caption_strategy: String,
     pub rank: u32,

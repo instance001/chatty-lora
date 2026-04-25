@@ -23,12 +23,13 @@ Chatty-lora currently focuses on the front half of the LoRA workflow:
 
 - `Builder` page
   - choose a curated dataset
-  - choose a detected base model
-  - choose a training backend target
+  - choose a detected base model with family-aware grouping
+  - choose a training backend target with compatibility guidance
   - define trigger phrase, concept type, preset, and starter settings
   - save a reusable training plan into `config/projects/`
   - generate Wan 2.1 / Musubi Tuner handoff files into `config/training/generated/`
   - surface a Wan preflight card for model files, WSL, and trainer readiness
+  - explain when a backend was auto-suggested versus manually overridden
 
 - `Helper Chat`
   - page-aware local guidance for both `Materials` and `Builder`
@@ -55,6 +56,13 @@ There are now two early Wan/Musubi foundations:
 - `Image visual lane` for still-image identity, object, and style concepts trained into the same Wan 2.1 T2V family
 
 The app runner is intentionally scoped to saved Wan/Musubi plan cards. It does not yet train arbitrary model families, manage multiple simultaneous jobs, or provide a full historical run database. Manual PowerShell/WSL commands remain visible as the fallback path when a driver, ROCm, or Musubi issue needs closer inspection.
+
+Under the hood, Chatty-lora now keeps this groundwork separate on purpose:
+- model families such as `wan`, `flux`, and `ai_assistant`
+- training backends such as Musubi, `kohya_ss`, `AI Toolkit`, and `OneTrainer`
+- training lanes that connect a family to a backend and dataset kind
+
+That keeps the current Wan path simple while giving future Flux, audio, and non-Musubi routes somewhere clean to plug in.
 
 ## Design Principles
 
@@ -85,7 +93,7 @@ The app runner is intentionally scoped to saved Wan/Musubi plan cards. It does n
   Curated datasets live here.
 
 - [`outputs/`](outputs/)
-  Future exports and generated artefacts.
+  Training outputs and future exports.
 
 - [`models/`](models/)
   Base models and helper weights that the future training flow can detect.
@@ -189,12 +197,34 @@ The generic site-fix proposal step now performs a small inspection pass. When yo
 1. Pick the curated dataset.
 2. Pick a base model.
 3. Pick the training backend target.
-4. Enter a trigger phrase.
-5. Describe the concept.
-6. Choose a preset and starter settings.
-7. Click `Save training plan`.
+4. Build a `Concept stack` one block at a time:
+   select a block type, pick a role, enter a trigger term, add the training intent, and describe that one lesson.
+5. Click `Add concept block`.
+6. Repeat for supporting pose, outfit, environment, composition, or guardrail blocks as needed.
+7. Choose a preset and starter settings.
+8. Click `Save training plan`.
 
 That writes a reusable training plan into [`config/projects/`](config/projects/).
+
+Each concept block stays compact in the stack below the composer. You can expand/collapse, reorder, edit inline, duplicate, or delete blocks without leaving the Builder page.
+
+The Builder is now family-aware too:
+- base-model choices are grouped by model family
+- backend choices are ranked toward compatible lanes first
+- Chatty-lora can auto-suggest a better backend when the selected family changes
+- a visible badge explains whether the current backend is `auto-suggested` or a `manual choice`
+
+Concept block roles:
+
+- `Primary lesson`: the main identity, style, or core concept. Primary blocks lead the generated caption recipe.
+- `Supporting detail`: secondary context such as outfit, pose, environment, or camera language.
+- `Avoid / don't reinforce`: saved guardrails for recurring distractions or mistakes; these are kept out of the positive caption recipe in the current Wan lane.
+
+Concept stack reuse:
+
+- `Export stack` writes the current block stack into the transfer box and also copies it to the clipboard when the browser allows it.
+- `Import replace` swaps the current stack for the pasted one.
+- `Import append` merges pasted blocks into the current stack.
 
 For the Wan/Musubi backends, it also writes a trainer handoff folder into [`config/training/generated/`](config/training/generated/).
 
@@ -208,6 +238,11 @@ The handoff folder contains:
 - `run_all.sh`
 - `plan.json`
 - `README.md`
+
+`plan.json` and the generated `README.md` now also record:
+- the selected training lane
+- the backend id
+- whether the backend was an `auto-suggested` match or a deliberate manual override
 
 The saved plan card also surfaces a `Wan handoff` block with copyable PowerShell commands for:
 - running preflight checks without training
@@ -224,6 +259,8 @@ The saved plan card also has an app runner. `Run this saved plan` launches the g
 4. train the LoRA
 
 The runner keeps those as separate internal stages, so a failure can report whether the problem was setup, VAE latent cache, T5 text cache, or the training launch itself. Manual PowerShell commands remain visible as the fallback path.
+
+Saved plan cards now keep the backend-choice state too, so when you reload or inspect a plan later you can still see whether that backend came from Chatty-lora's family-aware suggestion or from an intentional manual override.
 
 The top runnable saved-plan card also shows an `ECG Window`: a small CPU/GPU activity graph using Windows performance counters. The CPU line helps make cache/prep work visible during long GPU-quiet stages, while the GPU line shows training bursts once Musubi is doing Radeon compute work.
 
@@ -256,7 +293,11 @@ Current runner limits:
 
 These settings shape the generated training plan. They are not magic quality sliders. Higher numbers usually cost more time, memory, or overfitting risk.
 
-- `Concept type`: tells Chatty-lora what kind of thing you are teaching, such as style, character, object, location, or motion. It mainly changes guidance and defaults.
+- `Concept stack`: the concept is no longer one flat summary. Build it out of focused blocks so the generated captions know what should lead, what should support, and what should stay out.
+- `Concept block type`: tells Chatty-lora what kind of lesson that one block is teaching, such as style, portrait, outfit, pose, composition, or motion.
+- `Block role`: marks whether that block is the primary lesson, a supporting detail, or an avoid guardrail.
+- `Trigger term`: the short distinct handle you will use later to call the LoRA concept.
+- `Training intent`: a plain-language note about what that one block should teach.
 - `Training preset`: chooses a starter personality for the run. Use `Balanced starter` until you have a reason not to.
 - `Trigger phrase`: the rare phrase you will later type in prompts to call the LoRA concept.
 - `Concept summary`: the plain-language target. This is where you say what should stay consistent.
@@ -313,7 +354,7 @@ Why narrow? Because Wan LoRA training is still a fast-moving, fiddly space. A sm
 The image visual lane deliberately reuses the same Wan 2.1 T2V model bundle and Musubi scripts. It creates an `image_metadata.jsonl` handoff instead of a `video_metadata.jsonl` handoff. In plain language: this is for teaching Wan visual identity/style foundations from still images, not for replacing a normal Stable Diffusion image trainer.
 
 The Builder preflight card checks:
-- Wan model bundle files under `models/wan21_t2v_1_3b/`
+- Wan dependency files under `models/wan/dependencies/`
 - WSL distro availability
 - Musubi Tuner script availability
 - the selected DiT file used by generated plans
@@ -338,6 +379,14 @@ For the first real run, use a tiny dataset and choose `512px`, `1` epoch, and `b
 ## Setup Parts And Search Terms
 
 The exact versions will change. The important thing is to get the matching family of parts, not blindly copy an old version number.
+
+Model folders now follow a family-first layout:
+
+- `models/wan/gguf/` for Wan GGUF inference files
+- `models/wan/dependencies/` for Wan training dependencies like DiT, VAE, T5, and CLIP
+- `models/flux/gguf/` for Flux GGUF inference files
+- `models/flux/dependencies/` for future Flux support files
+- `models/ai_assistant/gguf/` for local app-assistant GGUF models
 
 Core app tools:
 - Rust: search `rustup install windows rust`
@@ -374,11 +423,14 @@ Useful current source pages:
 - Comfy-Org Wan 2.1 DiT files: `https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/diffusion_models`
 - Comfy-Org Wan 2.1 VAE files: `https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/vae`
 
-The files should land here:
-- `models/wan21_t2v_1_3b/dit/`
-- `models/wan21_t2v_1_3b/vae/`
-- `models/wan21_t2v_1_3b/t5/`
-- `models/wan21_t2v_1_3b/clip/`
+The Wan training dependency files should land here:
+- `models/wan/dependencies/dit/`
+- `models/wan/dependencies/vae/`
+- `models/wan/dependencies/t5/`
+- `models/wan/dependencies/clip/`
+
+Optional Wan GGUF inference files can live here:
+- `models/wan/gguf/`
 
 If a model page shifts, ask your preferred flagship AI for help. A useful prompt is:
 

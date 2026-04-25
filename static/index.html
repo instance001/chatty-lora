@@ -364,18 +364,24 @@
               <label class="field-block">
                 <span class="field-title">Training backend</span>
                 <select id="trainingBackendSelect"></select>
-                <span class="field-help">The trainer family and script format Chatty-lora will prepare for.</span>
+                <span class="field-help" id="trainingBackendHelp">The trainer family and script format Chatty-lora will prepare for.</span>
+                <span class="backend-selection-state" id="trainingBackendSelectionState"></span>
               </label>
 
               <div class="builder-settings-grid">
                 <label class="field-block compact">
-                  <span class="field-title">Concept type</span>
+                  <span class="field-title">Concept block type</span>
                   <select id="conceptTypeSelect">
                     <option value="style">Style / aesthetic</option>
-                    <option value="character">Character / person</option>
-                    <option value="motion">Motion / action</option>
+                    <option value="character">Character / likeness</option>
+                    <option value="portrait">Face / portrait</option>
+                    <option value="outfit">Outfit / costume</option>
                     <option value="object">Object / product</option>
                     <option value="location">Location / environment</option>
+                    <option value="pose">Pose / action</option>
+                    <option value="motion">Motion pattern</option>
+                    <option value="composition">Composition / camera language</option>
+                    <option value="expression">Expression / mood</option>
                     <option value="assistant">Assistant / persona</option>
                   </select>
                   <span class="field-help" id="conceptTypeHelp"></span>
@@ -392,25 +398,79 @@
                 </label>
               </div>
 
-              <label class="field-block">
-                <span class="field-title">Trigger phrase</span>
-                <input
-                  id="triggerPhraseInput"
-                  type="text"
-                  placeholder="e.g. chatty_lora_style"
-                />
-                <span class="field-help">Use a short rare phrase. This is the handle you prompt with later to call the LoRA.</span>
-              </label>
+              <div class="note-panel concept-stack-panel">
+                <div class="section-heading-row">
+                  <div>
+                    <p class="summary-title">Concept stack</p>
+                    <h3>Build the training intent one block at a time</h3>
+                  </div>
+                  <span class="section-note">Select a type, add a trigger, describe the intent, then stack another block if needed.</span>
+                </div>
 
-              <label class="field-block">
-                <span class="field-title">Concept summary</span>
-                <textarea
-                  id="conceptSummaryInput"
-                  rows="5"
-                  placeholder="Describe the concept, subject, style, or assistant persona this LoRA should learn."
-                ></textarea>
-                <span class="field-help">Say what should stay consistent. Avoid stuffing in unrelated hopes and dreams just yet.</span>
-              </label>
+                <div class="builder-settings-grid">
+                  <label class="field-block compact">
+                    <span class="field-title">Block role</span>
+                    <select id="conceptRoleSelect">
+                      <option value="primary" selected>Primary lesson</option>
+                      <option value="supporting">Supporting detail</option>
+                      <option value="avoid">Avoid / don’t reinforce</option>
+                    </select>
+                    <span class="field-help" id="conceptRoleHelp">Primary blocks lead the caption recipe. Supporting blocks add context. Avoid blocks are saved as guardrails and kept out of the positive caption stream.</span>
+                  </label>
+                  <label class="field-block compact">
+                    <span class="field-title">Trigger term</span>
+                    <input
+                      id="triggerPhraseInput"
+                      type="text"
+                      placeholder="e.g. chatty_lora_style"
+                    />
+                    <span class="field-help" id="triggerPhraseHelp">Use a short rare phrase. This is the handle you prompt with later to call the LoRA.</span>
+                  </label>
+                  <label class="field-block compact">
+                    <span class="field-title">Training intent</span>
+                    <input
+                      id="trainingIntentInput"
+                      type="text"
+                      placeholder="e.g. keep likeness stable across angles"
+                    />
+                    <span class="field-help">Say what this block is trying to teach, not every detail in the whole project.</span>
+                  </label>
+                </div>
+
+                <label class="field-block">
+                  <span class="field-title">Concept details</span>
+                  <textarea
+                    id="conceptSummaryInput"
+                    rows="4"
+                    placeholder="Describe the visual lesson for this one block: what should stay consistent, what matters most, and what kind of examples are in the dataset."
+                  ></textarea>
+                  <span class="field-help">Keep each block focused. You can add another block for pose, environment, outfit, or style instead of stuffing everything here.</span>
+                </label>
+
+                <div class="inline-actions">
+                  <button class="secondary-button" id="addConceptBlockButton" type="button">Add concept block</button>
+                  <button class="secondary-button" id="clearConceptComposerButton" type="button">Clear block</button>
+                  <button class="secondary-button" id="exportConceptStackButton" type="button">Export stack</button>
+                  <button class="secondary-button" id="replaceConceptStackButton" type="button">Import replace</button>
+                  <button class="secondary-button" id="appendConceptStackButton" type="button">Import append</button>
+                  <button class="secondary-button" id="clearConceptTransferButton" type="button">Clear transfer</button>
+                  <span class="inline-note" id="conceptStackNote">Add at least one concept block so the generated captions have a clear lesson to follow.</span>
+                </div>
+
+                <label class="field-block">
+                  <span class="field-title">Concept stack transfer</span>
+                  <textarea
+                    id="conceptTransferInput"
+                    rows="6"
+                    placeholder='Paste exported concept stack JSON here, then use Import replace or Import append. Export stack also copies the current stack here and to the clipboard when possible.'
+                  ></textarea>
+                  <span class="field-help">This is local only. Use it to move stacked concept blocks between plans without recreating them by hand.</span>
+                </label>
+
+                <div class="concept-block-list" id="conceptBlockList">
+                  <div class="empty-state">No concept blocks yet. Add one to describe what this LoRA should learn.</div>
+                </div>
+              </div>
 
               <label class="field-block">
                 <span class="field-title">Caption strategy</span>
@@ -597,6 +657,7 @@
       </main>
     </div>
 
+    <script src="/static/concept-stack.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

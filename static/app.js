@@ -7,12 +7,15 @@ const state = {
   builder: {
     selectedDatasetSlug: "",
     selectedTrainingBackendId: "",
+    backendSelectionManuallyOverridden: false,
     lastSeededProjectName: "",
     loadedProjectSlug: "",
     loadedProjectName: "",
     loadedSnapshot: null,
     draftMode: "",
     deletingProjectSlug: "",
+    conceptBlocks: [],
+    editingConceptIndex: -1,
   },
   training: {
     status: null,
@@ -114,12 +117,27 @@ const elements = {
   datasetSelect: document.getElementById("datasetSelect"),
   baseModelSelect: document.getElementById("baseModelSelect"),
   trainingBackendSelect: document.getElementById("trainingBackendSelect"),
+  trainingBackendHelp: document.getElementById("trainingBackendHelp"),
+  trainingBackendSelectionState: document.getElementById("trainingBackendSelectionState"),
   conceptTypeSelect: document.getElementById("conceptTypeSelect"),
+  conceptRoleSelect: document.getElementById("conceptRoleSelect"),
   trainingPresetSelect: document.getElementById("trainingPresetSelect"),
   triggerPhraseInput: document.getElementById("triggerPhraseInput"),
+  triggerPhraseHelp: document.getElementById("triggerPhraseHelp"),
+  trainingIntentInput: document.getElementById("trainingIntentInput"),
   conceptSummaryInput: document.getElementById("conceptSummaryInput"),
+  addConceptBlockButton: document.getElementById("addConceptBlockButton"),
+  clearConceptComposerButton: document.getElementById("clearConceptComposerButton"),
+  exportConceptStackButton: document.getElementById("exportConceptStackButton"),
+  replaceConceptStackButton: document.getElementById("replaceConceptStackButton"),
+  appendConceptStackButton: document.getElementById("appendConceptStackButton"),
+  clearConceptTransferButton: document.getElementById("clearConceptTransferButton"),
+  conceptStackNote: document.getElementById("conceptStackNote"),
+  conceptTransferInput: document.getElementById("conceptTransferInput"),
+  conceptBlockList: document.getElementById("conceptBlockList"),
   captionStrategySelect: document.getElementById("captionStrategySelect"),
   conceptTypeHelp: document.getElementById("conceptTypeHelp"),
+  conceptRoleHelp: document.getElementById("conceptRoleHelp"),
   trainingPresetHelp: document.getElementById("trainingPresetHelp"),
   captionStrategyHelp: document.getElementById("captionStrategyHelp"),
   builderPlanExplanationPanel: document.getElementById("builderPlanExplanationPanel"),
@@ -337,6 +355,21 @@ elements.datasetSelect.addEventListener("change", () => {
 
 elements.trainingBackendSelect.addEventListener("change", () => {
   state.builder.selectedTrainingBackendId = elements.trainingBackendSelect.value;
+  state.builder.backendSelectionManuallyOverridden = true;
+  renderBuilder();
+});
+
+elements.baseModelSelect.addEventListener("change", () => {
+  const previousBackendId = state.builder.selectedTrainingBackendId;
+  populateTrainingBackendSelect({ preserveCompatibleSelection: state.builder.backendSelectionManuallyOverridden });
+  if (state.builder.selectedTrainingBackendId && state.builder.selectedTrainingBackendId !== previousBackendId) {
+    const suggestedBackend = getSelectedTrainingBackend();
+    const baseModelOption = selectedBaseModelOption();
+    if (suggestedBackend && baseModelOption) {
+      elements.prepareProjectNote.textContent = `Switched the backend to ${suggestedBackend.name} because it matches the ${baseModelOption.family_label} family better.`;
+      state.builder.backendSelectionManuallyOverridden = false;
+    }
+  }
   renderBuilder();
 });
 
@@ -344,8 +377,10 @@ for (const input of [
   elements.projectNameInput,
   elements.baseModelSelect,
   elements.conceptTypeSelect,
+  elements.conceptRoleSelect,
   elements.trainingPresetSelect,
   elements.triggerPhraseInput,
+  elements.trainingIntentInput,
   elements.conceptSummaryInput,
   elements.captionStrategySelect,
   elements.rankInput,
@@ -359,6 +394,31 @@ for (const input of [
   input.addEventListener("input", renderBuilderGuidance);
   input.addEventListener("change", renderBuilderGuidance);
 }
+
+elements.addConceptBlockButton.addEventListener("click", () => {
+  addConceptBlockFromComposer();
+});
+
+elements.clearConceptComposerButton.addEventListener("click", () => {
+  clearConceptComposer();
+});
+
+elements.exportConceptStackButton.addEventListener("click", () => {
+  void exportConceptStack();
+});
+
+elements.replaceConceptStackButton.addEventListener("click", () => {
+  importConceptStack("replace");
+});
+
+elements.appendConceptStackButton.addEventListener("click", () => {
+  importConceptStack("append");
+});
+
+elements.clearConceptTransferButton.addEventListener("click", () => {
+  elements.conceptTransferInput.value = "";
+  elements.conceptStackNote.textContent = "Cleared the concept stack transfer box.";
+});
 
 elements.prepareProjectButton.addEventListener("click", () => {
   void prepareBuilderProject();
@@ -1218,24 +1278,65 @@ function renderModelList() {
     return;
   }
 
-  const items = state.dashboard.materials.model_summary.items;
-  if (!items.length) {
+  const models = state.dashboard.materials.model_summary;
+  const families = Array.isArray(models.families) ? models.families : [];
+  if (!models.items.length) {
     elements.modelsList.innerHTML = `<div class="empty-state">No local model files detected yet. Drop candidate base models or helper weights into models/.</div>`;
     return;
   }
 
-  elements.modelsList.innerHTML = items
-    .map(
-      (item) => `
-        <article class="list-item">
-          <div>
-            <h4>${escapeHtml(item.name)}</h4>
-            <p>${escapeHtml(item.relative_path)}</p>
+  elements.modelsList.innerHTML = families
+    .map((family) => {
+      const counts = [
+        `${family.total} files`,
+        `${family.gguf} GGUF`,
+        `${family.safetensors} safetensors`,
+      ];
+      if (family.checkpoints) {
+        counts.push(`${family.checkpoints} checkpoints`);
+      }
+      if (family.other) {
+        counts.push(`${family.other} other`);
+      }
+      const trainingBadge = family.included_in_training_base_model_picker
+        ? `<span class="list-badge ok-badge">training picker</span>`
+        : `<span class="list-badge muted-badge">helper-only</span>`;
+      const trainingNote = family.included_in_training_base_model_picker
+        ? "This family can appear in the Builder base-model picker when compatible files are present."
+        : "This family supports app features like helper chat and diagnostics, so it is intentionally excluded from the Builder training base-model picker.";
+
+      return `
+        <section class="model-family-group">
+          <div class="model-family-header">
+            <div>
+              <h4>${escapeHtml(family.label)}</h4>
+              <p>${escapeHtml(family.relative_root)}</p>
+              <p>${escapeHtml(family.purpose)}</p>
+              <p>${escapeHtml(trainingNote)}</p>
+            </div>
+            <div class="source-meta">
+              ${trainingBadge}
+              ${counts.map((count) => `<span class="list-badge">${escapeHtml(count)}</span>`).join("")}
+            </div>
           </div>
-          <span class="list-badge">${escapeHtml(item.kind)}</span>
-        </article>
-      `,
-    )
+          <div class="model-family-items">
+            ${family.items
+              .map(
+                (item) => `
+                  <article class="list-item">
+                    <div>
+                      <h4>${escapeHtml(item.name)}</h4>
+                      <p>${escapeHtml(item.relative_path)}</p>
+                    </div>
+                    <span class="list-badge">${escapeHtml(item.kind)}</span>
+                  </article>
+                `,
+              )
+              .join("")}
+          </div>
+        </section>
+      `;
+    })
     .join("");
 }
 
@@ -1269,6 +1370,7 @@ function renderBuilder() {
   const builder = state.dashboard.builder;
   const selectedDataset = getSelectedDataset();
   const selectedBackend = getSelectedTrainingBackend();
+  const selectedLaneLabel = selectedBackend?.lane_label || "Not chosen yet";
   elements.builderStatusList.innerHTML = builder.status_lines
     .map((line) => `<li>${escapeHtml(line)}</li>`)
     .join("");
@@ -1287,6 +1389,7 @@ function renderBuilder() {
         summaryCard("Other files", String(selectedDataset.other), "Captions, notes, or uncategorized files"),
         summaryCard("Saved outputs", String(outputs.total), "Useful later for synthetic training passes"),
         summaryCard("Base models", String(models.total), "Local candidates visible to the builder"),
+        summaryCard("Training lane", selectedLaneLabel, selectedBackend?.lane_task ? `${selectedBackend.lane_dataset_kind} dataset | task ${selectedBackend.lane_task}` : "Choose a backend to resolve the lane"),
         summaryCard("Backend target", selectedBackend ? selectedBackend.name : "Not chosen yet", selectedBackend ? (selectedBackend.ready ? "Looks locally ready" : "Plan target only for now") : "Choose a trainer family before you save"),
       ].join("")
     : [
@@ -1294,6 +1397,7 @@ function renderBuilder() {
         summaryCard("Curated datasets", String(builder.curated_datasets.length), "Build one on Materials, then use it here"),
         summaryCard("Saved outputs", String(outputs.total), "Useful later for synthetic training passes"),
         summaryCard("Base models", String(models.total), "Local candidates visible to the builder"),
+        summaryCard("Training lane", selectedLaneLabel, selectedBackend?.lane_task ? `${selectedBackend.lane_dataset_kind} dataset | task ${selectedBackend.lane_task}` : "Choose a backend to resolve the lane"),
         summaryCard("Backend target", selectedBackend ? selectedBackend.name : "Not chosen yet", selectedBackend ? (selectedBackend.ready ? "Looks locally ready" : "Plan target only for now") : "Choose a trainer family before you save"),
       ].join("");
 
@@ -1305,6 +1409,101 @@ function renderBuilder() {
   renderBuilderGuidance();
 }
 
+function selectedBaseModelOption() {
+  if (!state.dashboard) {
+    return null;
+  }
+  return (state.dashboard.builder.base_model_options || []).find(
+    (option) => option.value === elements.baseModelSelect.value,
+  ) || null;
+}
+
+function rankedTrainingBackends(backends) {
+  const baseModelOption = selectedBaseModelOption();
+  return [...(Array.isArray(backends) ? backends : [])].sort((left, right) => {
+    const leftCompatibility = backendFamilyCompatibility(left, baseModelOption);
+    const rightCompatibility = backendFamilyCompatibility(right, baseModelOption);
+    const leftScore = leftCompatibility.compatible === true ? 0 : leftCompatibility.compatible === null ? 1 : 2;
+    const rightScore = rightCompatibility.compatible === true ? 0 : rightCompatibility.compatible === null ? 1 : 2;
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+    if (left.ready !== right.ready) {
+      return left.ready ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function backendFamilyCompatibility(backend, baseModelOption) {
+  if (!backend || !baseModelOption) {
+    return {
+      compatible: null,
+      note: "Choose both a base model and a backend to see family compatibility.",
+    };
+  }
+
+  const compatibleFamilies = Array.isArray(backend.compatible_family_ids) ? backend.compatible_family_ids : [];
+  const compatible = compatibleFamilies.includes(baseModelOption.family_id);
+  return compatible
+    ? {
+      compatible: true,
+      note: `${backend.name} is registered for the ${baseModelOption.family_label} family.`,
+    }
+    : {
+      compatible: false,
+      note: `${backend.name} is not currently registered for the ${baseModelOption.family_label} family.`,
+    };
+}
+
+function trainingBackendSuggestionReason(backend, baseModelOption) {
+  if (!backend) {
+    return "Choose a trainer family and Chatty-lora will explain the suggested lane.";
+  }
+  if (!baseModelOption) {
+    return `${backend.name} is available, but the strongest recommendation appears once you pick a base-model family.`;
+  }
+
+  const compatibility = backendFamilyCompatibility(backend, baseModelOption);
+  if (compatibility.compatible === true) {
+    if (backend.ready) {
+      return `${backend.name} is being suggested because it matches the ${baseModelOption.family_label} family and looks locally ready.`;
+    }
+    return `${backend.name} is being suggested because it matches the ${baseModelOption.family_label} family, even though the local runtime still needs setup.`;
+  }
+  if (compatibility.compatible === false) {
+    return `${backend.name} is currently selected, but it does not match the ${baseModelOption.family_label} family. Pick a matched lane unless you have a deliberate reason not to.`;
+  }
+  return `${backend.name} is available, but Chatty-lora cannot score family compatibility until both the base model and backend are chosen.`;
+}
+
+function trainingBackendSelectionState(backend, baseModelOption) {
+  if (!backend) {
+    return {
+      badgeClass: "muted-badge",
+      badgeLabel: "no backend",
+      body: "Pick a backend and Chatty-lora will show whether it was auto-suggested or chosen manually.",
+    };
+  }
+
+  const compatibility = backendFamilyCompatibility(backend, baseModelOption);
+  if (state.builder.backendSelectionManuallyOverridden) {
+    return {
+      badgeClass: compatibility.compatible === false ? "warm-badge" : "muted-badge",
+      badgeLabel: "manual choice",
+      body: compatibility.compatible === false
+        ? "You manually kept this backend even though it does not match the current base-model family."
+        : "You manually chose this backend, so future family suggestions will not replace it unless it becomes a mismatch and you re-pick the base model.",
+    };
+  }
+
+  return {
+    badgeClass: compatibility.compatible === false ? "warm-badge" : compatibility.compatible ? "ok-badge" : "muted-badge",
+    badgeLabel: "auto-suggested",
+    body: trainingBackendSuggestionReason(backend, baseModelOption),
+  };
+}
+
 function renderBuilderGuidance() {
   if (!state.dashboard) {
     return;
@@ -1314,18 +1513,42 @@ function renderBuilderGuidance() {
 
   const dataset = getSelectedDataset();
   const backend = getSelectedTrainingBackend();
-  const concept = conceptGuidance(elements.conceptTypeSelect.value);
+  const conceptBlocks = serializeConceptBlocks(state.builder.conceptBlocks);
+  const primaryBlock = leadConceptBlock(conceptBlocks) || normalizedConceptBlock({
+    concept_type: elements.conceptTypeSelect.value,
+    trigger_phrase: elements.triggerPhraseInput.value,
+    concept_summary: elements.conceptSummaryInput.value,
+    training_intent: elements.trainingIntentInput.value,
+  }, { expanded: true });
+  const concept = conceptGuidance(primaryBlock.concept_type);
   const preset = presetGuidance(elements.trainingPresetSelect.value);
   const caption = captionGuidance(elements.captionStrategySelect.value);
   const settings = currentTrainingSettings();
   const mediaKind = trainingBackendMediaKind(backend);
   const pressure = settingsPressure(settings, dataset, mediaKind);
-  const triggerPhrase = elements.triggerPhraseInput.value.trim();
-  const conceptSummary = elements.conceptSummaryInput.value.trim();
+  const baseModelOption = selectedBaseModelOption();
+  const backendCompatibility = backendFamilyCompatibility(backend, baseModelOption);
+  const backendSelection = trainingBackendSelectionState(backend, baseModelOption);
+  const laneNote = backend?.lane_label
+    ? `Selected lane: ${backend.lane_label}${backend.lane_task ? ` (${backend.lane_dataset_kind} dataset, task ${backend.lane_task})` : ""}.`
+    : "No lane selected yet. Pick a backend to resolve the training lane.";
+  const triggerPhrase = primaryBlock.trigger_phrase;
+  const conceptSummary = primaryBlock.concept_summary;
+  const trainingIntent = primaryBlock.training_intent;
+  const roleSummary = conceptRoleGuidance(primaryBlock.role);
 
   setHelpText(elements.conceptTypeHelp, concept.help);
+  setHelpText(elements.trainingBackendHelp, trainingBackendSuggestionReason(backend, baseModelOption));
+  if (elements.trainingBackendSelectionState) {
+    elements.trainingBackendSelectionState.innerHTML = `
+      <span class="list-badge ${backendSelection.badgeClass}">${escapeHtml(backendSelection.badgeLabel)}</span>
+      <span>${escapeHtml(backendSelection.body)}</span>
+    `;
+  }
+  setHelpText(elements.conceptRoleHelp, roleSummary.help);
   setHelpText(elements.trainingPresetHelp, preset.help);
   setHelpText(elements.captionStrategyHelp, caption.help);
+  setHelpText(elements.triggerPhraseHelp, triggerPhraseHelp(triggerPhrase));
   setHelpText(elements.rankHelp, rankHelp(settings.rank));
   setHelpText(elements.repeatsHelp, `Shows each training item ${settings.repeats} time${settings.repeats === 1 ? "" : "s"} per epoch.`);
   setHelpText(elements.epochsHelp, `Runs ${settings.epochs} full pass${settings.epochs === 1 ? "" : "es"} over the repeated dataset.`);
@@ -1349,6 +1572,23 @@ function renderBuilderGuidance() {
   const summaryNote = conceptSummary
     ? "Concept summary is filled in and will be folded into generated captions."
     : "Add a short concept summary describing what should stay consistent.";
+  const intentNote = trainingIntent
+    ? `Training intent for the lead block: ${trainingIntent}.`
+    : "Add a training intent so each concept block says what it is trying to teach.";
+  const roleNote = `Lead block role: ${roleSummary.label}. ${roleSummary.body}`;
+  const baseModelNote = baseModelOption
+    ? `Base model family: ${baseModelOption.family_label}. ${baseModelOption.detail}`
+    : "Choose a base model so the plan is anchored to a specific family and file bucket.";
+  const backendFamilyNote = backendCompatibility.note;
+  const stackNote = conceptBlocks.length
+    ? `${conceptBlocks.length} concept block${conceptBlocks.length === 1 ? "" : "s"} stacked into this plan.`
+    : "No concept blocks added yet. The generated plan will be much clearer once you stack at least one.";
+  const avoidCount = conceptBlocks.filter((block) => block.role === "avoid").length;
+  const avoidNote = avoidCount
+    ? `${avoidCount} avoid block${avoidCount === 1 ? "" : "s"} saved as guardrails. They will not be inserted into positive training captions.`
+    : "No avoid blocks yet. Add one if there is a recurring visual pattern you do not want this run to reinforce.";
+
+  renderConceptBlockList();
 
   elements.builderPlanExplanationPanel.innerHTML = `
     <div class="builder-guidance-heading">
@@ -1361,14 +1601,23 @@ function renderBuilderGuidance() {
     <p>${escapeHtml(concept.body)}</p>
     <div class="source-meta">
       <span class="list-badge">${escapeHtml(dataset?.display_name || "no dataset selected")}</span>
+      <span class="list-badge">${escapeHtml(backend?.lane_label || "no lane selected")}</span>
       <span class="list-badge">${escapeHtml(backend?.name || "no backend selected")}</span>
       <span class="list-badge">${escapeHtml(preset.label)}</span>
       <span class="list-badge">${escapeHtml(caption.label)}</span>
+      <span class="list-badge ${backendCompatibility.compatible === false ? "warm-badge" : backendCompatibility.compatible ? "ok-badge" : "muted-badge"}">${escapeHtml(backendCompatibility.compatible === false ? "family mismatch" : backendCompatibility.compatible ? "family matched" : "family unchecked")}</span>
     </div>
     <ul class="bullet-list compact-bullets">
+      <li>${escapeHtml(stackNote)}</li>
       <li>${escapeHtml(datasetNote)}</li>
+      <li>${escapeHtml(laneNote)}</li>
+      <li>${escapeHtml(baseModelNote)}</li>
+      <li>${escapeHtml(backendFamilyNote)}</li>
       <li>${escapeHtml(triggerNote)}</li>
+      <li>${escapeHtml(roleNote)}</li>
+      <li>${escapeHtml(intentNote)}</li>
       <li>${escapeHtml(summaryNote)}</li>
+      <li>${escapeHtml(avoidNote)}</li>
       <li>${escapeHtml(caption.body)}</li>
     </ul>
   `;
@@ -1463,14 +1712,18 @@ function currentTrainingSettings() {
 }
 
 function getBuilderFormSnapshot() {
+  const conceptBlocks = serializeConceptBlocks(state.builder.conceptBlocks);
+  const primaryBlock = leadConceptBlock(conceptBlocks);
   return {
     project_name: elements.projectNameInput.value.trim(),
     dataset_slug: elements.datasetSelect.value,
     base_model: elements.baseModelSelect.value,
     training_backend_id: elements.trainingBackendSelect.value,
-    trigger_phrase: elements.triggerPhraseInput.value.trim(),
-    concept_summary: elements.conceptSummaryInput.value.trim(),
-    concept_type: elements.conceptTypeSelect.value,
+    backend_selection_manually_overridden: state.builder.backendSelectionManuallyOverridden,
+    trigger_phrase: primaryBlock.trigger_phrase,
+    concept_summary: primaryBlock.concept_summary,
+    concept_type: primaryBlock.concept_type,
+    concept_blocks: conceptBlocks,
     training_preset: elements.trainingPresetSelect.value,
     caption_strategy: elements.captionStrategySelect.value,
     rank: toMaybeNumber(elements.rankInput.value) || 0,
@@ -1484,14 +1737,18 @@ function getBuilderFormSnapshot() {
 }
 
 function projectToBuilderSnapshot(project) {
+  const conceptBlocks = serializeConceptBlocks(projectConceptBlocks(project));
+  const primaryBlock = leadConceptBlock(conceptBlocks);
   return {
     project_name: project.project_name || "",
     dataset_slug: project.dataset_slug || "",
     base_model: project.base_model || "",
     training_backend_id: project.training_backend_id || "",
-    trigger_phrase: project.trigger_phrase || "",
-    concept_summary: project.concept_summary || "",
-    concept_type: project.concept_type || "style",
+    backend_selection_manually_overridden: Boolean(project.backend_selection_manually_overridden),
+    trigger_phrase: primaryBlock.trigger_phrase,
+    concept_summary: primaryBlock.concept_summary,
+    concept_type: primaryBlock.concept_type,
+    concept_blocks: conceptBlocks,
     training_preset: project.training_preset || "balanced",
     caption_strategy: project.caption_strategy || "source-title",
     rank: Number(project.rank || 0),
@@ -1502,49 +1759,6 @@ function projectToBuilderSnapshot(project) {
     learning_rate: Number(project.learning_rate || 0),
     validation_split_percent: Number(project.validation_split_percent || 0),
   };
-}
-
-function isBuilderFormDirty() {
-  if (!state.builder.loadedSnapshot) {
-    return false;
-  }
-  return JSON.stringify(getBuilderFormSnapshot()) !== JSON.stringify(state.builder.loadedSnapshot);
-}
-
-function conceptGuidance(value) {
-  const guidance = {
-    style: {
-      title: "Style / aesthetic LoRA",
-      body: "Best when the dataset shares a look: color language, texture, composition, rendering style, or camera mood.",
-      help: "Use this when the look matters more than one exact subject.",
-    },
-    character: {
-      title: "Character / person LoRA",
-      body: "Best when identity consistency matters: face, body shape, outfit language, markings, or a recognizable subject.",
-      help: "Use this when the same subject needs to stay recognizable.",
-    },
-    motion: {
-      title: "Motion / action LoRA",
-      body: "Best for Wan video concepts where movement pattern matters: how a subject turns, flies, walks, gestures, or animates.",
-      help: "Use this for video-first concepts where the movement is the lesson.",
-    },
-    object: {
-      title: "Object / product LoRA",
-      body: "Best when the model needs to learn a specific item, prop, vehicle, product, or physical form.",
-      help: "Use this when shape and object details matter most.",
-    },
-    location: {
-      title: "Location / environment LoRA",
-      body: "Best when the place itself is the concept: architecture, room layout, landscape, weather, or atmosphere.",
-      help: "Use this when the setting is the thing being taught.",
-    },
-    assistant: {
-      title: "Assistant / persona LoRA",
-      body: "Useful later for text/persona lanes. For the current Wan lane, prefer style, character, object, location, or motion.",
-      help: "Future-facing for non-video personality or assistant training lanes.",
-    },
-  };
-  return guidance[value] || guidance.style;
 }
 
 function presetGuidance(value) {
@@ -1832,36 +2046,57 @@ function seedBuilderForm() {
 
   const currentBaseModel = elements.baseModelSelect.value;
   populateDatasetSelect();
-  populateTrainingBackendSelect();
   syncProjectNameSuggestion();
 
   const options = state.dashboard.builder.base_model_options;
   const markup = options.length
     ? options
-        .map((option) => `<option value="${escapeAttribute(option)}">${escapeHtml(option)}</option>`)
+        .map((option) => `<option value="${escapeAttribute(option.value)}" data-family-id="${escapeAttribute(option.family_id)}" data-family-label="${escapeAttribute(option.family_label)}" data-detail="${escapeAttribute(option.detail)}">${escapeHtml(`${option.family_label}: ${option.label}`)}</option>`)
         .join("")
     : `<option value="">No base models detected yet</option>`;
   elements.baseModelSelect.innerHTML = markup;
-  if (currentBaseModel && options.includes(currentBaseModel)) {
+  if (currentBaseModel && options.some((option) => option.value === currentBaseModel)) {
     elements.baseModelSelect.value = currentBaseModel;
   }
 
-  if (!elements.triggerPhraseInput.value) {
-    elements.triggerPhraseInput.value = "chatty_lora_subject";
-  }
+  state.builder.backendSelectionManuallyOverridden = false;
+  populateTrainingBackendSelect();
+
 }
 
-function populateTrainingBackendSelect() {
-  const backends = state.dashboard.builder.training_backends;
+function suggestedTrainingBackend(backends, requestedId, { preserveCompatibleSelection = true } = {}) {
+  const rankedBackendsList = rankedTrainingBackends(backends);
+  const baseModelOption = selectedBaseModelOption();
+  const requestedBackend = rankedBackendsList.find((backend) => backend.id === requestedId) || null;
+  const requestedCompatibility = backendFamilyCompatibility(requestedBackend, baseModelOption);
+
+  if (preserveCompatibleSelection && requestedBackend && requestedCompatibility.compatible !== false) {
+    return requestedBackend;
+  }
+
+  return rankedBackendsList.find((backend) => backendFamilyCompatibility(backend, baseModelOption).compatible === true)
+    || requestedBackend
+    || rankedBackendsList.find((backend) => backendFamilyCompatibility(backend, baseModelOption).compatible !== false)
+    || rankedBackendsList[0]
+    || null;
+}
+
+function populateTrainingBackendSelect({ preserveCompatibleSelection = true } = {}) {
+  const backends = rankedTrainingBackends(state.dashboard.builder.training_backends);
   const requestedId = state.builder.selectedTrainingBackendId || state.dashboard.builder.recommended_training_backend_id || "";
-  const selectedBackend = backends.find((backend) => backend.id === requestedId) || backends[0] || null;
+  const selectedBackend = suggestedTrainingBackend(backends, requestedId, { preserveCompatibleSelection });
 
   state.builder.selectedTrainingBackendId = selectedBackend ? selectedBackend.id : "";
 
   const markup = backends.length
     ? backends
         .map((backend) => {
-          const detail = backend.ready ? "ready" : "not ready yet";
+          const compatibility = backendFamilyCompatibility(backend, selectedBaseModelOption());
+          const detail = compatibility.compatible === true
+            ? (backend.ready ? "compatible | ready" : "compatible | not ready yet")
+            : compatibility.compatible === false
+              ? (backend.ready ? "family mismatch | ready" : "family mismatch | not ready yet")
+              : (backend.ready ? "ready" : "not ready yet");
           return `<option value="${escapeAttribute(backend.id)}">${escapeHtml(backend.name)} (${escapeHtml(detail)})</option>`;
         })
         .join("")
@@ -2158,10 +2393,12 @@ function renderPreparedProjects(projects) {
                 ${project.generated_training_relative_path
                   ? `<p class="muted-copy">Generated handoff: ${escapeHtml(project.generated_training_relative_path)}</p>`
                   : ""}
-                <div class="source-meta">
+              <div class="source-meta">
                   <span class="list-badge">${escapeHtml(project.dataset_slug)}</span>
                   <span class="list-badge">${escapeHtml(project.concept_type)}</span>
+                  <span class="list-badge">${escapeHtml(`${(project.concept_blocks || []).length || 1} concept ${(project.concept_blocks || []).length === 1 || !(project.concept_blocks || []).length ? "block" : "blocks"}`)}</span>
                   <span class="list-badge">${escapeHtml(backendLabelFromDashboard(project.training_backend_id))}</span>
+                  <span class="list-badge ${project.backend_selection_manually_overridden ? "muted-badge" : "ok-badge"}">${escapeHtml(project.backend_selection_manually_overridden ? "manual backend" : "auto-suggested backend")}</span>
                   <span class="list-badge">${project.resolution}px</span>
                   <span class="list-badge">rank ${project.rank}</span>
                 </div>
@@ -2298,6 +2535,8 @@ function renderProjectHandoff(project, showTelemetry = false) {
   const commands = Array.isArray(project.generated_training_commands) ? project.generated_training_commands : [];
   const statusLabel = project.generated_training_ready ? "baby dragon ready" : "needs attention";
   const statusClass = project.generated_training_ready ? "ok-badge" : "warm-badge";
+  const backendSelectionLabel = project.backend_selection_manually_overridden ? "manual backend" : "auto-suggested backend";
+  const backendSelectionClass = project.backend_selection_manually_overridden ? "muted-badge" : "ok-badge";
   const videoBadge = Number.isFinite(project.video_rows)
     ? `<span class="list-badge">${project.video_rows} video row${project.video_rows === 1 ? "" : "s"}</span>`
     : "";
@@ -2314,10 +2553,12 @@ function renderProjectHandoff(project, showTelemetry = false) {
         </div>
         <div class="baby-dragon-badges">
           <span class="list-badge ${statusClass}">${statusLabel}</span>
+          <span class="list-badge ${backendSelectionClass}">${escapeHtml(backendSelectionLabel)}</span>
           ${videoBadge}
           ${imageBadge}
         </div>
       </div>
+      <p class="muted-copy">Backend choice for this saved handoff: ${escapeHtml(project.backend_selection_manually_overridden ? "manual override kept on purpose." : "auto-suggested from the selected model family.")}</p>
       ${notes.length
         ? `<ul class="bullet-list compact-bullets">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>`
         : ""}
@@ -2731,28 +2972,42 @@ function renderTrainingBackends(backends, selectedBackend) {
     return;
   }
 
+  const rankedBackends = rankedTrainingBackends(backends);
+  const baseModelOption = selectedBaseModelOption();
   elements.trainingBackendList.innerHTML = `
     <div class="dataset-card-grid">
-      ${backends
-        .map((backend) => `
+      ${rankedBackends
+        .map((backend) => {
+          const compatibility = backendFamilyCompatibility(backend, baseModelOption);
+          const compatibilityBadge = compatibility.compatible === true
+            ? '<span class="list-badge ok-badge">family matched</span>'
+            : compatibility.compatible === false
+              ? '<span class="list-badge warm-badge">family mismatch</span>'
+              : '<span class="list-badge muted-badge">family unchecked</span>';
+          return `
           <article class="dataset-card ${selectedBackend && selectedBackend.id === backend.id ? "selected" : ""}">
             <div class="dataset-card-copy">
               <div class="dataset-card-title-row">
                 <h4>${escapeHtml(backend.name)}</h4>
                 <span class="list-badge ${backend.ready ? "ok-badge" : ""}">${backend.ready ? "ready" : "not ready"}</span>
+                ${compatibilityBadge}
                 ${selectedBackend && selectedBackend.id === backend.id ? '<span class="list-badge ok-badge">selected</span>' : ""}
               </div>
               <p>${escapeHtml(backend.description)}</p>
               <div class="source-meta">
                 <span class="list-badge">Best for: ${escapeHtml(backend.best_for)}</span>
+                ${backend.lane_label ? `<span class="list-badge">Lane: ${escapeHtml(backend.lane_label)}</span>` : ""}
+                <span class="list-badge">Families: ${escapeHtml((backend.compatible_family_labels || []).join(", ") || "none registered yet")}</span>
                 <span class="list-badge">${escapeHtml(backend.relative_path || "No local folder detected yet")}</span>
               </div>
               <ul class="bullet-list compact-bullets">
+                <li>${escapeHtml(compatibility.note)}</li>
                 ${backend.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}
               </ul>
             </div>
           </article>
-        `)
+        `;
+        })
         .join("")}
     </div>
   `;
@@ -2882,15 +3137,21 @@ async function deletePreparedProject(slug) {
 }
 
 function applyProjectToBuilderForm(project) {
+  const conceptBlocks = projectConceptBlocks(project);
+  const primaryBlock = leadConceptBlock(conceptBlocks);
   state.builder.selectedDatasetSlug = project.dataset_slug || "";
   state.builder.selectedTrainingBackendId = project.training_backend_id || "";
+  state.builder.backendSelectionManuallyOverridden = Boolean(project.backend_selection_manually_overridden);
+  state.builder.conceptBlocks = conceptBlocks;
   elements.projectNameInput.value = project.project_name || "";
   elements.datasetSelect.value = project.dataset_slug || "";
   elements.baseModelSelect.value = project.base_model || "";
   elements.trainingBackendSelect.value = project.training_backend_id || "";
-  elements.triggerPhraseInput.value = project.trigger_phrase || "";
-  elements.conceptSummaryInput.value = project.concept_summary || "";
-  elements.conceptTypeSelect.value = project.concept_type || "style";
+  elements.triggerPhraseInput.value = "";
+  elements.trainingIntentInput.value = "";
+  elements.conceptSummaryInput.value = "";
+  elements.conceptRoleSelect.value = "primary";
+  elements.conceptTypeSelect.value = primaryBlock.concept_type || "style";
   elements.trainingPresetSelect.value = project.training_preset || "balanced";
   elements.captionStrategySelect.value = project.caption_strategy || "source-title";
   elements.rankInput.value = project.rank || 8;
@@ -3524,14 +3785,18 @@ async function prepareBuilderProject() {
     return;
   }
 
+  const conceptBlocks = normalizedConceptBlocks(state.builder.conceptBlocks);
+  const primaryConceptBlock = leadConceptBlock(conceptBlocks) || currentConceptComposerBlock();
   const payload = {
     project_name: elements.projectNameInput.value.trim(),
     dataset_slug: datasetSlug,
     base_model: elements.baseModelSelect.value,
     training_backend_id: elements.trainingBackendSelect.value,
-    trigger_phrase: elements.triggerPhraseInput.value.trim(),
-    concept_summary: elements.conceptSummaryInput.value.trim(),
-    concept_type: elements.conceptTypeSelect.value,
+    backend_selection_manually_overridden: state.builder.backendSelectionManuallyOverridden,
+    trigger_phrase: primaryConceptBlock.trigger_phrase,
+    concept_summary: primaryConceptBlock.concept_summary,
+    concept_type: primaryConceptBlock.concept_type,
+    concept_blocks: conceptBlocks,
     training_preset: elements.trainingPresetSelect.value,
     caption_strategy: elements.captionStrategySelect.value,
     rank: Number(elements.rankInput.value || 0),
@@ -3545,6 +3810,11 @@ async function prepareBuilderProject() {
 
   if (!payload.project_name) {
     elements.prepareProjectNote.textContent = "Give the LoRA project a name first.";
+    return;
+  }
+
+  if (!payload.concept_blocks.length) {
+    elements.prepareProjectNote.textContent = "Add at least one concept block before saving the training plan.";
     return;
   }
 
@@ -3695,6 +3965,9 @@ function adapterReady(adapterKind) {
 }
 
 function buildHelperPayload(question) {
+  const primaryConceptBlock = leadConceptBlock(state.builder.conceptBlocks)
+    || currentConceptComposerBlock();
+  const baseModelOption = selectedBaseModelOption();
   return {
     page: state.page,
     question,
@@ -3716,8 +3989,11 @@ function buildHelperPayload(question) {
       prepared_project_count: state.dashboard?.builder?.prepared_projects?.length || 0,
       project_name: elements.projectNameInput.value.trim(),
       base_model: elements.baseModelSelect.value,
+      base_model_family_id: baseModelOption?.family_id || null,
+      base_model_family_label: baseModelOption?.family_label || null,
       training_backend_id: elements.trainingBackendSelect.value,
-      concept_type: elements.conceptTypeSelect.value,
+      backend_selection_manually_overridden: state.builder.backendSelectionManuallyOverridden,
+      concept_type: primaryConceptBlock.concept_type,
       training_preset: elements.trainingPresetSelect.value,
       caption_strategy: elements.captionStrategySelect.value,
       rank: toMaybeNumber(elements.rankInput.value),
@@ -3734,8 +4010,9 @@ function buildHelperPayload(question) {
 function helperContextTitle() {
   if (state.page === "builder") {
     const dataset = getSelectedDataset();
+    const baseModelOption = selectedBaseModelOption();
     if (dataset) {
-      return `Builder is focused on dataset "${dataset.display_name}" with ${dataset.total_files} file${dataset.total_files === 1 ? "" : "s"}.`;
+      return `Builder is focused on dataset "${dataset.display_name}" with ${dataset.total_files} file${dataset.total_files === 1 ? "" : "s"}${baseModelOption ? ` and the ${baseModelOption.family_label} base-model family` : ""}.`;
     }
     return "Builder is waiting for a curated dataset before it can give project-specific guidance.";
   }

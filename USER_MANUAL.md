@@ -369,41 +369,126 @@ The first real backend targets are:
 
 Choosing a backend does not start training by itself. It shapes the saved plan and generated WSL files. Once the plan card is saved and marked ready, the `Run this saved plan` button can launch the sequence.
 
+The Builder now helps more actively here:
+- it groups base models by family
+- it ranks compatible backends higher for the selected family
+- it can auto-suggest a better backend when the chosen base-model family changes
+- it shows a small state note so you can tell whether the current backend is `auto-suggested` or a `manual choice`
+
+If you manually pick a backend and it still matches the selected family, Chatty-lora keeps that choice. If it becomes a family mismatch after a base-model change, Chatty-lora may switch back to a more compatible suggestion.
+
 ### Project Name
 
 This is the name of your LoRA training plan.
 
 Chatty-lora will suggest one, but you can change it.
 
-### Trigger Phrase
+### Concept Stack
 
-This is the special phrase people will later use to call the LoRA concept.
+The Builder no longer assumes one flat concept summary.
+
+Instead, you build a `Concept stack` one block at a time.
+
+Think of each block as one lesson:
+- one main lesson
+- one supporting detail
+- one guardrail you do not want reinforced
+
+The compact composer at the top stays simple:
+1. pick a block type
+2. pick a block role
+3. enter a trigger term
+4. write the training intent
+5. write the concept details
+6. click `Add concept block`
+
+The card appears in the stack underneath.
+
+You can then:
+- expand or collapse it with `+` and `-`
+- move it `Up` or `Down`
+- `Edit` it inline
+- `Duplicate` it and tweak the copy
+- remove it with `X`
+
+This keeps the form beginner-friendly while still letting one plan teach more than one idea cleanly.
+
+### Block Type
+
+Block type tells Chatty-lora what kind of lesson that block is trying to teach.
+
+Examples in the UI:
+- `Style / aesthetic`
+- `Character / likeness`
+- `Face / portrait`
+- `Outfit / costume`
+- `Object / product`
+- `Location / environment`
+- `Pose / action`
+- `Motion pattern`
+- `Composition / camera language`
+- `Expression / mood`
+
+Use the closest match. It mainly helps the guidance text and caption recipe stay aligned with what you are actually teaching.
+
+### Block Role
+
+Role tells Chatty-lora how important that block is.
+
+The roles mean:
+- `Primary lesson`: the main thing the LoRA should learn first
+- `Supporting detail`: useful context that should help without taking over
+- `Avoid / don't reinforce`: a saved reminder about recurring mistakes or distractions in the dataset
+
+For the current Wan lane, avoid blocks are kept out of the positive caption recipe.
+
+### Trigger Term
+
+This is the special short phrase people will later use to call the LoRA concept.
 
 Examples:
 - `chatty_lora_style`
 - `janet_character`
 - `kookaburra_motion`
 
-### Concept Summary
+Beginner rule:
+- keep it short
+- keep it uncommon
+- prefer one underscored term over a long normal-language phrase
 
-This is your plain-language description of what the LoRA should learn.
+### Training Intent
+
+This is the plain-language sentence for what that one block is trying to teach.
 
 Examples:
-- `A bright painterly tropical bird illustration style`
-- `A particular character with consistent hair, face, and clothes`
-- `A short wildlife motion concept with a kookaburra perched on a pole`
+- `keep facial identity stable across angles`
+- `preserve the same tropical paint texture and bright palette`
+- `teach the recurring standing pose without overpowering the likeness`
 
-### Concept Type
+This is not meant to describe the whole project. It is the purpose of one block.
 
-This helps organize what kind of thing you are teaching.
+### Concept Details
 
-Examples in the UI:
-- style
-- character
-- object
-- location
-- motion
-- assistant
+This is where you describe the visual lesson for that one block in plain language.
+
+Examples:
+- `A bright painterly tropical bird illustration style with bold color separation and soft textured brush edges`
+- `A particular character with consistent hair shape, face structure, and recognizable markings`
+- `A short wildlife motion concept with a kookaburra perched upright on a pole before hopping`
+
+If you catch yourself writing "and also the outfit, and also the background, and also the camera angle", that is a clue to add another block instead of overstuffing one.
+
+### Reusing Good Stacks
+
+The transfer box under the stack is there so good concept setups do not have to be rebuilt by hand.
+
+Buttons:
+- `Export stack` writes the current concept stack into the transfer box and also copies it to the clipboard when the browser allows it
+- `Import replace` swaps the current stack for the pasted one
+- `Import append` adds pasted blocks onto the current stack
+- `Clear transfer` clears the transfer box only
+
+This is a practical reuse tool for local work, not a cloud sync system.
 
 ### Training Preset
 
@@ -538,7 +623,7 @@ Use presets to get started, then judge results and adjust slowly.
 The Builder has a Wan preflight card for the current Wan training lanes.
 
 It checks:
-- whether the Wan model files are in `models/wan21_t2v_1_3b/`
+- whether the Wan dependency files are in `models/wan/dependencies/`
 - whether WSL is available
 - whether the Musubi Tuner scripts exist in the expected WSL folder
 - which DiT file will be used for generated plans
@@ -569,7 +654,14 @@ That generated folder contains:
 - `plan.json`
 - `README.md`
 
+The generated `plan.json` and per-plan `README.md` now also record:
+- the training lane label
+- the backend id
+- whether the backend came from an `auto-suggested` match or a manual override
+
 The saved plan card also shows a `Wan handoff` block.
+
+That handoff block now repeats the saved backend-choice state as part of the readout, so the card, the generated files, and the Builder all tell the same story.
 
 That block now has two ways to run:
 - the `Run this saved plan` app button
@@ -689,6 +781,17 @@ Exact versions change. The safest way to think about setup is:
 
 You want the current matching version family of each part, not a random old file from a forum thread.
 
+Chatty-lora now uses a family-first model folder layout:
+- `models/wan/gguf/` for Wan GGUF inference files
+- `models/wan/dependencies/` for Wan training dependencies like DiT, VAE, T5, and CLIP
+- `models/flux/gguf/` for Flux GGUF inference files
+- `models/flux/dependencies/` for future Flux support files
+- `models/ai_assistant/gguf/` for local app-assistant GGUF models
+
+The `ai_assistant` family is for regular GGUFs that pilot Chatty-lora itself, such as helper chat and web-crawl/support workflows. Those models do not participate in LoRA training and are not meant to be used as Builder training base models.
+
+This family-first layout is mirrored in the app too. The Materials summary, Builder base-model picker, backend compatibility guidance, and training-lane labels are all using the same family-based groundwork instead of each inventing their own folder assumptions.
+
 ### Core App Tools
 
 Use these search terms:
@@ -743,11 +846,14 @@ Useful current source pages:
 - `https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P/tree/main`
 - `https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main`
 
-Put them here:
-- `models/wan21_t2v_1_3b/dit/`
-- `models/wan21_t2v_1_3b/vae/`
-- `models/wan21_t2v_1_3b/t5/`
-- `models/wan21_t2v_1_3b/clip/`
+Put the Wan training dependency files here:
+- `models/wan/dependencies/dit/`
+- `models/wan/dependencies/vae/`
+- `models/wan/dependencies/t5/`
+- `models/wan/dependencies/clip/`
+
+Optional Wan GGUF inference files can live here:
+- `models/wan/gguf/`
 
 For the current training lane, the CLIP file is optional. It is kept because it is useful for future image/video reference work.
 
@@ -905,7 +1011,7 @@ If you are brand new, use this order:
 7. Switch to `Builder`.
 8. Choose the curated dataset.
 9. Choose the Wan/Musubi backend target.
-10. Fill in the concept summary and trigger phrase.
+10. Build at least one concept block: choose a type, role, trigger term, training intent, and concept details, then click `Add concept block`.
 11. Save the training plan.
 12. Check the generated handoff folder.
 13. Click `Run this saved plan`, or run the scripts manually in WSL if you need the fallback route.

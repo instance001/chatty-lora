@@ -1,6 +1,9 @@
+mod backend_registry;
 mod builder;
 mod datasets;
 mod helper;
+mod lane_registry;
+mod model_registry;
 mod runner;
 mod sources;
 mod state;
@@ -29,13 +32,14 @@ use tokio::{fs, process::Command as TokioCommand, sync::RwLock, time::timeout};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::info;
 use types::{
-    BuilderDeleteProjectRequest, BuilderPanel, BuilderPrepareRequest, DashboardResponse,
-    DatasetCreateRequest, DatasetPreflightSummary, DatasetSummary, DatasetVideoSummary,
-    FolderSummary, HelperQueryRequest, LibraryItem, LocalDatasetImportRequest, MaterialPanel,
-    ModelItem, ModelSummary, OpenLocalPathRequest, OpenLocalPathResponse, RuntimeSummary,
-    SearchPreviewRequest, SourceFixApplyPreviewRequest, SourceFixApplyRequest,
-    SourceFixOpenRequest, SourceFixProposalSaveRequest, SourceFixProposeRequest,
-    SourceFixSaveRequest, SourceRegistryUpdateRequest, SystemTelemetrySnapshot, TrainingRunRequest,
+    BaseModelOption, BuilderDeleteProjectRequest, BuilderPanel, BuilderPrepareRequest,
+    DashboardResponse, DatasetCreateRequest, DatasetPreflightSummary, DatasetSummary,
+    DatasetVideoSummary, FolderSummary, HelperQueryRequest, LibraryItem, LocalDatasetImportRequest,
+    MaterialPanel, ModelFamilySummary, ModelItem, ModelSummary, OpenLocalPathRequest,
+    OpenLocalPathResponse, RuntimeSummary, SearchPreviewRequest, SourceFixApplyPreviewRequest,
+    SourceFixApplyRequest, SourceFixOpenRequest, SourceFixProposalSaveRequest,
+    SourceFixProposeRequest, SourceFixSaveRequest, SourceRegistryUpdateRequest,
+    SystemTelemetrySnapshot, TrainingRunRequest,
 };
 use walkdir::WalkDir;
 
@@ -584,15 +588,37 @@ fn build_dashboard(paths: &ProjectPaths) -> Result<DashboardResponse> {
 
     let mut base_model_options = Vec::new();
     if wan_training.model_bundle_ready {
-        base_model_options.push("Wan 2.1 T2V 1.3B bundle".to_string());
+        base_model_options.push(BaseModelOption {
+            value: "Wan 2.1 T2V 1.3B bundle".to_string(),
+            label: "Wan 2.1 T2V 1.3B bundle".to_string(),
+            family_id: model_registry::WAN_FAMILY_ID.to_string(),
+            family_label: "Wan".to_string(),
+            detail: "Resolved from the Wan dependency bundle used by the Musubi training lanes."
+                .to_string(),
+        });
     }
-    base_model_options.extend(
-        model_summary
+    base_model_options.extend(model_summary.families.iter().flat_map(|family| {
+        if !model_registry::include_family_in_training_base_model_picker(&family.id) {
+            return Vec::new().into_iter();
+        }
+
+        family
             .items
             .iter()
-            .filter(|item| item.kind == "GGUF" || item.kind == "Safetensors")
-            .map(|item| item.name.clone()),
-    );
+            .filter(move |item| item.kind == "GGUF")
+            .filter(move |_item| {
+                model_registry::include_family_in_training_base_model_picker(&family.id)
+            })
+            .map(move |item| BaseModelOption {
+                value: item.name.clone(),
+                label: item.name.clone(),
+                family_id: family.id.clone(),
+                family_label: family.label.clone(),
+                detail: item.relative_path.clone(),
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+    }));
 
     Ok(DashboardResponse {
         app_name: "Chatty-lora",
@@ -630,6 +656,7 @@ fn build_dashboard(paths: &ProjectPaths) -> Result<DashboardResponse> {
                 "Use the Builder page to pick a curated dataset, choose the Wan/Musubi backend, shape the starter settings, and save a reusable local training plan."
                     .to_string(),
                 "Saved Wan plans show an app runner plus manual fallback commands, so the first run stays visible and reversible.".to_string(),
+                model_registry::family_layout_note(),
                 "This sister tool is standalone and does not share live code paths with Chatty-art."
                     .to_string(),
             ],
@@ -732,6 +759,7 @@ fn scan_models(folder: &Path) -> Result<ModelSummary> {
             safetensors: 0,
             checkpoints: 0,
             other: 0,
+            families: Vec::new(),
             items: Vec::new(),
         });
     }
@@ -742,8 +770,10 @@ fn scan_models(folder: &Path) -> Result<ModelSummary> {
         safetensors: 0,
         checkpoints: 0,
         other: 0,
+        families: Vec::new(),
         items: Vec::new(),
     };
+    let mut families = BTreeMap::<String, ModelFamilySummary>::new();
 
     for entry in WalkDir::new(folder)
         .min_depth(1)
@@ -754,6 +784,13 @@ fn scan_models(folder: &Path) -> Result<ModelSummary> {
     {
         let path = entry.path();
         let kind = classify_model_kind(path);
+        let relative_path = path
+            .strip_prefix(folder)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        let (family_id, family_label, family_purpose, family_root) =
+            classify_model_family(&relative_path);
         summary.total += 1;
         match kind.as_str() {
             "GGUF" => summary.gguf += 1,
@@ -762,19 +799,45 @@ fn scan_models(folder: &Path) -> Result<ModelSummary> {
             _ => summary.other += 1,
         }
 
-        summary.items.push(ModelItem {
+        let item = ModelItem {
             name: path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string(),
-            kind,
-            relative_path: path
-                .strip_prefix(folder)
-                .unwrap_or(path)
-                .display()
-                .to_string(),
-        });
+            kind: kind.clone(),
+            family_id: family_id.to_string(),
+            family_label: family_label.to_string(),
+            relative_path,
+        };
+
+        summary.items.push(item.clone());
+
+        let family_summary =
+            families
+                .entry(family_id.to_string())
+                .or_insert_with(|| ModelFamilySummary {
+                    id: family_id.to_string(),
+                    label: family_label.to_string(),
+                    purpose: family_purpose.to_string(),
+                    included_in_training_base_model_picker:
+                        model_registry::include_family_in_training_base_model_picker(family_id),
+                    relative_root: family_root.to_string(),
+                    total: 0,
+                    gguf: 0,
+                    safetensors: 0,
+                    checkpoints: 0,
+                    other: 0,
+                    items: Vec::new(),
+                });
+        family_summary.total += 1;
+        match kind.as_str() {
+            "GGUF" => family_summary.gguf += 1,
+            "Safetensors" => family_summary.safetensors += 1,
+            "Checkpoint" => family_summary.checkpoints += 1,
+            _ => family_summary.other += 1,
+        }
+        family_summary.items.push(item);
     }
 
     summary.items.sort_by(|a, b| {
@@ -782,6 +845,14 @@ fn scan_models(folder: &Path) -> Result<ModelSummary> {
             .to_ascii_lowercase()
             .cmp(&b.name.to_ascii_lowercase())
     });
+    for family in families.values_mut() {
+        family.items.sort_by(|a, b| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+        });
+    }
+    summary.families = families.into_values().collect();
     Ok(summary)
 }
 
@@ -1295,6 +1366,34 @@ fn classify_model_kind(path: &Path) -> String {
         Some("ckpt" | "pt" | "pth" | "bin") => "Checkpoint".to_string(),
         _ => "Other".to_string(),
     }
+}
+
+fn classify_model_family(
+    relative_path: &str,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    let normalized = relative_path.replace('\\', "/");
+    let first_segment = normalized.split('/').next().unwrap_or_default();
+    if let Some(family) = model_registry::MODEL_FAMILIES.iter().find(|family| {
+        family
+            .relative_root
+            .strip_prefix("models/")
+            .map(|segment| segment == first_segment)
+            .unwrap_or(false)
+    }) {
+        return (
+            family.id,
+            family.label,
+            family.purpose,
+            family.relative_root,
+        );
+    }
+
+    (
+        "unsorted",
+        "Unsorted",
+        "Model files that are not in a known family bucket yet.",
+        "models/",
+    )
 }
 
 fn extension(path: &Path) -> Option<String> {

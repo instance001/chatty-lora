@@ -1,6 +1,6 @@
-# Wan 2.1 T2V 1.3B Model Folder
+# Wan Dependency Folder
 
-This folder is for the first real Chatty-lora training lane:
+This folder holds the training dependencies for the first real Chatty-lora training lane:
 
 ```text
 Musubi Tuner / Wan 2.1 T2V 1.3B
@@ -8,18 +8,21 @@ Musubi Tuner / Wan 2.1 T2V 1.3B
 
 This is the small Wan video model lane we are proving first before expanding to bigger Wan models, VACE, Wan 2.2, Flux, or other families.
 
-## Folder Map
+## Family Layout
 
-Put files here:
+The Wan family now uses this layout:
 
 ```text
-models/wan21_t2v_1_3b/
-  dit/
-  vae/
-  t5/
-  clip/
-  extras/
+models/wan/
+  gguf/
+  dependencies/
+    dit/
+    vae/
+    t5/
+    clip/
 ```
+
+This `README.md` lives inside `models/wan/dependencies/`, which is the training-dependency side of that layout.
 
 ## Required Files
 
@@ -28,7 +31,7 @@ models/wan21_t2v_1_3b/
 Put one or both DiT files in:
 
 ```text
-dit/
+models/wan/dependencies/dit/
 ```
 
 Preferred:
@@ -57,7 +60,7 @@ Chatty-lora's preflight accepts the known variants. If a provider renames the fi
 Put this in:
 
 ```text
-vae/
+models/wan/dependencies/vae/
 ```
 
 Expected file:
@@ -71,7 +74,7 @@ wan_2.1_vae.safetensors
 Put this in:
 
 ```text
-t5/
+models/wan/dependencies/t5/
 ```
 
 Expected file:
@@ -85,7 +88,7 @@ models_t5_umt5-xxl-enc-bf16.pth
 Put this in:
 
 ```text
-clip/
+models/wan/dependencies/clip/
 ```
 
 Expected file:
@@ -96,12 +99,12 @@ models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth
 
 For the current T2V training lane, CLIP is not the most important piece. We keep it here because it is part of the wider Wan 2.1 toolchain and useful for future I2V/reference work.
 
-## Optional Extras
+## Optional GGUF Files
 
-Put local inference extras in:
+Put local inference GGUF files in:
 
 ```text
-extras/
+models/wan/gguf/
 ```
 
 Examples:
@@ -110,7 +113,7 @@ Examples:
 wan2.1_t2v_1.3b-q4_0.gguf
 ```
 
-These GGUF inference copies are not used by the Musubi training path. They can live beside the training files for convenience, but they are not required for LoRA training.
+These GGUF inference copies are not used by the Musubi training path. They live in the family `gguf` bucket for convenience, but they are not required for LoRA training.
 
 ## Where To Find The Files
 

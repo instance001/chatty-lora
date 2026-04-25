@@ -9,14 +9,30 @@ use serde_json::json;
 use walkdir::WalkDir;
 
 use crate::{
+    lane_registry,
     state::ProjectPaths,
     training,
     types::{
-        BuilderDeleteProjectRequest, BuilderDeleteProjectResponse, BuilderPrepareRequest,
-        BuilderPrepareResponse, PreparedProjectOutputSummary, PreparedProjectRunCommand,
-        PreparedProjectSummary,
+        BuilderConceptBlock, BuilderDeleteProjectRequest, BuilderDeleteProjectResponse,
+        BuilderPrepareRequest, BuilderPrepareResponse, PreparedProjectOutputSummary,
+        PreparedProjectRunCommand, PreparedProjectSummary,
     },
 };
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectConceptBlock {
+    #[serde(default = "default_project_concept_role")]
+    role: String,
+    concept_type: String,
+    trigger_phrase: String,
+    concept_summary: String,
+    #[serde(default)]
+    training_intent: String,
+}
+
+fn default_project_concept_role() -> String {
+    "primary".to_string()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProjectSpec {
@@ -27,9 +43,13 @@ struct ProjectSpec {
     base_model: String,
     #[serde(default = "default_training_backend_id")]
     training_backend_id: String,
+    #[serde(default)]
+    backend_selection_manually_overridden: bool,
     trigger_phrase: String,
     concept_summary: String,
     concept_type: String,
+    #[serde(default)]
+    concept_blocks: Vec<ProjectConceptBlock>,
     training_preset: String,
     caption_strategy: String,
     rank: u32,
@@ -96,6 +116,19 @@ pub fn prepare_project(
         .unwrap_or_default()
         .as_secs();
 
+    let concept_blocks = normalize_concept_blocks(
+        request.concept_blocks,
+        request.concept_type.trim(),
+        request.trigger_phrase.trim(),
+        request.concept_summary.trim(),
+    );
+    let primary_concept = primary_concept_block(
+        &concept_blocks,
+        request.concept_type.trim(),
+        request.trigger_phrase.trim(),
+        request.concept_summary.trim(),
+    );
+
     let mut spec = ProjectSpec {
         project_name: project_name.to_string(),
         project_slug: project_slug.clone(),
@@ -103,9 +136,11 @@ pub fn prepare_project(
         dataset_path: dataset_path.display().to_string(),
         base_model: request.base_model.trim().to_string(),
         training_backend_id: request.training_backend_id.trim().to_string(),
-        trigger_phrase: request.trigger_phrase.trim().to_string(),
-        concept_summary: request.concept_summary.trim().to_string(),
-        concept_type: request.concept_type.trim().to_string(),
+        backend_selection_manually_overridden: request.backend_selection_manually_overridden,
+        trigger_phrase: primary_concept.trigger_phrase.clone(),
+        concept_summary: primary_concept.concept_summary.clone(),
+        concept_type: primary_concept.concept_type.clone(),
+        concept_blocks,
         training_preset: request.training_preset.trim().to_string(),
         caption_strategy: request.caption_strategy.trim().to_string(),
         rank: request.rank,
@@ -160,6 +195,122 @@ pub fn prepare_project(
     })
 }
 
+fn normalize_concept_blocks(
+    blocks: Vec<BuilderConceptBlock>,
+    legacy_concept_type: &str,
+    legacy_trigger_phrase: &str,
+    legacy_concept_summary: &str,
+) -> Vec<ProjectConceptBlock> {
+    let mut normalized = blocks
+        .into_iter()
+        .map(|block| ProjectConceptBlock {
+            role: normalize_concept_role(&block.role),
+            concept_type: block.concept_type.trim().to_string(),
+            trigger_phrase: block.trigger_phrase.trim().to_string(),
+            concept_summary: block.concept_summary.trim().to_string(),
+            training_intent: block.training_intent.trim().to_string(),
+        })
+        .filter(|block| {
+            !block.concept_type.is_empty()
+                || !block.trigger_phrase.is_empty()
+                || !block.concept_summary.is_empty()
+                || !block.training_intent.is_empty()
+        })
+        .collect::<Vec<_>>();
+
+    if normalized.is_empty()
+        && (!legacy_concept_type.is_empty()
+            || !legacy_trigger_phrase.is_empty()
+            || !legacy_concept_summary.is_empty())
+    {
+        normalized.push(ProjectConceptBlock {
+            role: "primary".to_string(),
+            concept_type: legacy_concept_type.to_string(),
+            trigger_phrase: legacy_trigger_phrase.to_string(),
+            concept_summary: legacy_concept_summary.to_string(),
+            training_intent: String::new(),
+        });
+    }
+
+    normalized
+}
+
+fn effective_concept_blocks(spec: &ProjectSpec) -> Vec<ProjectConceptBlock> {
+    let blocks = normalize_concept_blocks(
+        spec.concept_blocks
+            .iter()
+            .cloned()
+            .map(|block| BuilderConceptBlock {
+                role: block.role,
+                concept_type: block.concept_type,
+                trigger_phrase: block.trigger_phrase,
+                concept_summary: block.concept_summary,
+                training_intent: block.training_intent,
+            })
+            .collect(),
+        spec.concept_type.trim(),
+        spec.trigger_phrase.trim(),
+        spec.concept_summary.trim(),
+    );
+    if blocks.is_empty() {
+        vec![ProjectConceptBlock {
+            role: "primary".to_string(),
+            concept_type: "style".to_string(),
+            trigger_phrase: String::new(),
+            concept_summary: String::new(),
+            training_intent: String::new(),
+        }]
+    } else {
+        blocks
+    }
+}
+
+fn primary_concept_block(
+    blocks: &[ProjectConceptBlock],
+    legacy_concept_type: &str,
+    legacy_trigger_phrase: &str,
+    legacy_concept_summary: &str,
+) -> ProjectConceptBlock {
+    blocks
+        .iter()
+        .find(|block| block.role == "primary")
+        .cloned()
+        .or_else(|| blocks.first().cloned())
+        .unwrap_or_else(|| ProjectConceptBlock {
+            concept_type: if legacy_concept_type.is_empty() {
+                "style".to_string()
+            } else {
+                legacy_concept_type.to_string()
+            },
+            role: "primary".to_string(),
+            trigger_phrase: legacy_trigger_phrase.to_string(),
+            concept_summary: legacy_concept_summary.to_string(),
+            training_intent: String::new(),
+        })
+}
+
+fn concept_blocks_for_summary(spec: &ProjectSpec) -> Vec<BuilderConceptBlock> {
+    effective_concept_blocks(spec)
+        .into_iter()
+        .map(|block| BuilderConceptBlock {
+            role: block.role,
+            concept_type: block.concept_type,
+            trigger_phrase: block.trigger_phrase,
+            concept_summary: block.concept_summary,
+            training_intent: block.training_intent,
+        })
+        .collect()
+}
+
+fn normalize_concept_role(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "primary" => "primary".to_string(),
+        "supporting" => "supporting".to_string(),
+        "avoid" => "avoid".to_string(),
+        _ => "primary".to_string(),
+    }
+}
+
 pub fn scan_project_specs(paths: &ProjectPaths) -> Result<Vec<PreparedProjectSummary>> {
     if !paths.project_specs.exists() {
         return Ok(Vec::new());
@@ -187,6 +338,8 @@ pub fn scan_project_specs(paths: &ProjectPaths) -> Result<Vec<PreparedProjectSum
         let generated_training_relative_path = spec.generated_training_path.clone();
         let handoff = build_project_handoff_summary(paths, &spec);
 
+        let concept_blocks = concept_blocks_for_summary(&spec);
+
         projects.push(PreparedProjectSummary {
             trained_outputs: collect_trained_outputs(paths, &spec.project_slug),
             slug: spec.project_slug,
@@ -203,9 +356,11 @@ pub fn scan_project_specs(paths: &ProjectPaths) -> Result<Vec<PreparedProjectSum
             dataset_slug: spec.dataset_slug,
             base_model: spec.base_model,
             training_backend_id: spec.training_backend_id,
+            backend_selection_manually_overridden: spec.backend_selection_manually_overridden,
             trigger_phrase: spec.trigger_phrase,
             concept_summary: spec.concept_summary,
             concept_type: spec.concept_type,
+            concept_blocks,
             training_preset: spec.training_preset,
             caption_strategy: spec.caption_strategy,
             resolution: spec.resolution,
@@ -404,6 +559,10 @@ fn build_project_handoff_summary(
             relative_path
         ));
     }
+    notes.push(format!(
+        "Backend selection for this saved handoff: {}.",
+        backend_selection_mode_label(spec.backend_selection_manually_overridden)
+    ));
 
     let missing_scripts = scripts
         .iter()
@@ -518,6 +677,14 @@ fn wsl_command(command: &str) -> String {
     )
 }
 
+fn backend_selection_mode_label(manually_overridden: bool) -> &'static str {
+    if manually_overridden {
+        "manual choice"
+    } else {
+        "auto-suggested"
+    }
+}
+
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -557,6 +724,24 @@ fn default_training_backend_id() -> String {
 }
 
 fn build_prepare_notes(spec: &ProjectSpec) -> Vec<String> {
+    let concept_blocks = effective_concept_blocks(spec);
+    let concept_summary = concept_blocks
+        .iter()
+        .map(|block| {
+            let label = match block.role.as_str() {
+                "supporting" => format!("supporting {}", block.concept_type),
+                "avoid" => format!("avoid {}", block.concept_type),
+                _ => block.concept_type.clone(),
+            };
+            if block.training_intent.trim().is_empty() {
+                label
+            } else {
+                format!("{} ({})", label, block.training_intent)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
     vec![
         format!(
             "Prepared project '{}' using dataset '{}'.",
@@ -570,12 +755,7 @@ fn build_prepare_notes(spec: &ProjectSpec) -> Vec<String> {
         ),
         format!(
             "Concept: {} | training settings: rank {} | repeats {} | epochs {} | {}px | batch size {}.",
-            spec.concept_type,
-            spec.rank,
-            spec.repeats,
-            spec.epochs,
-            spec.resolution,
-            spec.batch_size
+            concept_summary, spec.rank, spec.repeats, spec.epochs, spec.resolution, spec.batch_size
         ),
         format!(
             "Validation split: {}% | caption strategy: {}.",
@@ -592,10 +772,12 @@ enum WanDatasetKind {
 
 impl WanDatasetKind {
     fn from_backend_id(backend_id: &str) -> Self {
-        if training::is_musubi_wan_image_backend(backend_id) {
-            Self::Image
-        } else {
-            Self::Video
+        match lane_registry::lane_definition(backend_id)
+            .map(|lane| lane.dataset_kind)
+            .unwrap_or(lane_registry::TrainingDatasetKind::Video)
+        {
+            lane_registry::TrainingDatasetKind::Image => Self::Image,
+            lane_registry::TrainingDatasetKind::Video => Self::Video,
         }
     }
 
@@ -655,7 +837,11 @@ fn generate_wan_training_handoff(
     dataset_path: &Path,
     spec: &mut ProjectSpec,
 ) -> Result<(String, usize, &'static str)> {
+    let lane = lane_registry::lane_definition(&spec.training_backend_id)
+        .context("could not resolve the selected training lane")?;
     let dataset_kind = WanDatasetKind::from_backend_id(&spec.training_backend_id);
+    let backend_selection_mode =
+        backend_selection_mode_label(spec.backend_selection_manually_overridden);
     let wan_status = training::scan_wan_training(paths);
     if !wan_status.model_bundle_ready {
         bail!("Wan 2.1 model files are not complete enough to generate a Musubi handoff yet.");
@@ -688,9 +874,9 @@ fn generate_wan_training_handoff(
             .with_context(|| format!("could not create {}", folder.display()))?;
     }
 
-    let target_frames = dataset_kind.is_video().then_some(17u32);
-    let source_fps = dataset_kind.is_video().then_some(16.0f32);
-    let frame_extraction = dataset_kind.is_video().then(|| "head".to_string());
+    let target_frames = lane.defaults.target_frames;
+    let source_fps = lane.defaults.source_fps;
+    let frame_extraction = lane.defaults.frame_extraction.map(str::to_string);
     spec.generated_training_path = Some(
         generated_dir
             .strip_prefix(&paths.root)
@@ -698,7 +884,7 @@ fn generate_wan_training_handoff(
             .display()
             .to_string(),
     );
-    spec.wan_task = Some("t2v-1.3B".to_string());
+    spec.wan_task = Some(lane.task.to_string());
     spec.target_frames = target_frames;
     spec.source_fps = source_fps;
     spec.frame_extraction = frame_extraction.clone();
@@ -737,9 +923,11 @@ fn generate_wan_training_handoff(
 frame_extraction = "{frame_extraction}"
 source_fps = {source_fps:.1}
 "#,
-            target_frames = target_frames.unwrap_or(17),
-            frame_extraction = frame_extraction.as_deref().unwrap_or("head"),
-            source_fps = source_fps.unwrap_or(16.0),
+            target_frames = target_frames.unwrap_or(lane.defaults.target_frames.unwrap_or(17)),
+            frame_extraction = frame_extraction
+                .as_deref()
+                .unwrap_or(lane.defaults.frame_extraction.unwrap_or("head")),
+            source_fps = source_fps.unwrap_or(lane.defaults.source_fps.unwrap_or(16.0)),
         )
     } else {
         String::new()
@@ -785,6 +973,9 @@ num_repeats = {repeats}
         epochs: spec.epochs.max(1),
         learning_rate: spec.learning_rate,
         dataset_kind,
+        training_backend_id: spec.training_backend_id.clone(),
+        lane_label: lane.label.to_string(),
+        backend_selection_mode: backend_selection_mode.to_string(),
     };
 
     write_script(
@@ -825,7 +1016,11 @@ num_repeats = {repeats}
         "dataset_slug": spec.dataset_slug,
         "backend": &spec.training_backend_id,
         "training_backend_id": &spec.training_backend_id,
-        "task": "t2v-1.3B",
+        "backend_selection_mode": backend_selection_mode,
+        "backend_selection_manually_overridden": spec.backend_selection_manually_overridden,
+        "lane_label": lane.label,
+        "family_id": lane.family_id,
+        "task": lane.task,
         "dataset_kind": dataset_kind.media_label(),
         "video_rows": if dataset_kind.is_video() { Some(media_rows.len()) } else { None },
         "image_rows": if dataset_kind.is_image() { Some(media_rows.len()) } else { None },
@@ -930,19 +1125,53 @@ fn collect_media_rows(
 
 fn build_caption(spec: &ProjectSpec, title: &str, dataset_kind: WanDatasetKind) -> String {
     let mut parts = Vec::new();
-    if !spec.trigger_phrase.trim().is_empty() {
-        parts.push(spec.trigger_phrase.trim().to_string());
+    let concept_blocks = effective_concept_blocks(spec);
+
+    for trigger in concept_blocks
+        .iter()
+        .filter(|block| block.role == "primary")
+        .map(|block| block.trigger_phrase.trim())
+        .filter(|value| !value.is_empty())
+    {
+        push_unique_part(&mut parts, trigger);
     }
     if !title.trim().is_empty() {
-        parts.push(title.trim().to_string());
+        push_unique_part(&mut parts, title.trim());
     }
-    if !spec.concept_summary.trim().is_empty() {
-        parts.push(spec.concept_summary.trim().to_string());
+    for summary in concept_blocks
+        .iter()
+        .filter(|block| block.role == "primary")
+        .flat_map(|block| [block.concept_summary.trim(), block.training_intent.trim()])
+        .filter(|value| !value.is_empty())
+    {
+        push_unique_part(&mut parts, summary);
+    }
+    for trigger in concept_blocks
+        .iter()
+        .filter(|block| block.role == "supporting")
+        .map(|block| block.trigger_phrase.trim())
+        .filter(|value| !value.is_empty())
+    {
+        push_unique_part(&mut parts, trigger);
+    }
+    for summary in concept_blocks
+        .iter()
+        .filter(|block| block.role == "supporting")
+        .flat_map(|block| [block.concept_summary.trim(), block.training_intent.trim()])
+        .filter(|value| !value.is_empty())
+    {
+        push_unique_part(&mut parts, summary);
     }
     if parts.is_empty() {
         format!("training {}", dataset_kind.media_label())
     } else {
         parts.join(", ")
+    }
+}
+
+fn push_unique_part(parts: &mut Vec<String>, value: &str) {
+    if !parts.iter().any(|part| part.eq_ignore_ascii_case(value)) {
+        parts.push(value.to_string());
     }
 }
 
@@ -968,6 +1197,9 @@ struct WanScriptContext {
     epochs: u32,
     learning_rate: f32,
     dataset_kind: WanDatasetKind,
+    training_backend_id: String,
+    lane_label: String,
+    backend_selection_mode: String,
 }
 
 fn build_preflight_script(context: &WanScriptContext) -> String {
@@ -1350,6 +1582,10 @@ fn build_generated_readme(context: &WanScriptContext, video_count: usize) -> Str
 
 This folder was generated by Chatty-lora for the first Wan 2.1 T2V 1.3B training lane.
 
+Training lane: {lane_label}
+Backend id: {training_backend_id}
+Backend selection: {backend_selection_mode}
+
 {media_label_title} rows detected: {video_count}
 
 Run from Windows PowerShell if you want to launch the scripts manually:
@@ -1386,6 +1622,9 @@ If Musubi changes command flags later, edit the shell scripts in this folder bef
 "#,
         project = context.project_slug,
         media_label = media_label,
+        lane_label = context.lane_label,
+        training_backend_id = context.training_backend_id,
+        backend_selection_mode = context.backend_selection_mode,
         media_label_title = titlecase_ascii(media_label),
         video_count = video_count,
         preflight = preflight,

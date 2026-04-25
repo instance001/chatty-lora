@@ -10,7 +10,7 @@ models/
 
 ## Generated Wan / Musubi Plans
 
-When you save a Builder plan for `Musubi Tuner / Wan 2.1 T2V 1.3B`, Chatty-lora writes a handoff folder here:
+When you save a Builder plan for one of the current Wan/Musubi lanes, Chatty-lora writes a handoff folder here:
 
 ```text
 generated/<plan-slug>/
@@ -19,7 +19,7 @@ generated/<plan-slug>/
 Each generated folder contains:
 
 - `dataset.toml`
-- `video_metadata.jsonl`
+- `video_metadata.jsonl` for video-lane plans, or `image_metadata.jsonl` for image-visual-lane plans
 - `preflight.sh`
 - `cache_latents.sh`
 - `cache_text.sh`
@@ -31,14 +31,14 @@ Each generated folder contains:
 ## What Each File Does
 
 - `dataset.toml` tells Musubi where the curated dataset lives and how to read it.
-- `video_metadata.jsonl` gives Musubi the per-item metadata it needs for video training.
+- `video_metadata.jsonl` or `image_metadata.jsonl` gives Musubi the per-item metadata it needs for the selected lane.
 - `preflight.sh` checks generated files, model paths, video metadata, Musubi, PyTorch ROCm GPU access, `ffmpeg`, `ffprobe`, and shell syntax without starting training.
 - `cache_latents.sh` prepares latent cache files before training.
 - `cache_text.sh` prepares text-encoder cache files before training.
 - `launch.sh` starts the actual LoRA training command.
 - `run_all.sh` runs the cache steps and training step in order.
-- `plan.json` keeps Chatty-lora's saved settings beside the generated trainer files.
-- `README.md` is a per-plan quick note for the generated folder.
+- `plan.json` keeps Chatty-lora's saved settings beside the generated trainer files, including lane metadata and whether the backend was auto-suggested or manually overridden.
+- `README.md` is a per-plan quick note for the generated folder, including the selected lane, backend id, and backend-choice mode.
 
 ## Manual Run Order
 
@@ -122,7 +122,7 @@ Useful things to check:
 - Does WSL see the GPU?
 - Does PyTorch ROCm return `True` for `torch.cuda.is_available()`?
 - Does Musubi Tuner exist at the expected WSL path?
-- Are the Wan model files in `models/wan21_t2v_1_3b/`?
+- Are the Wan model files in `models/wan/dependencies/`?
 - Did the dataset folder contain usable files?
 
 This area is intentionally manual for now. Once the command path is boring and repeatable, the web UI can grow run/cancel/log controls safely.
