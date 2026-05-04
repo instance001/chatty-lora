@@ -23,6 +23,7 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     extract::State,
+    http::header::{CACHE_CONTROL, HeaderValue},
     response::{Html, IntoResponse},
     routing::{get, post},
 };
@@ -295,7 +296,11 @@ fn clamp_percent(value: f32) -> f32 {
 
 async fn index() -> impl IntoResponse {
     match fs::read_to_string("static/index.html").await {
-        Ok(contents) => Html(contents).into_response(),
+        Ok(contents) => (
+            [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+            Html(contents),
+        )
+            .into_response(),
         Err(_) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             "Missing static/index.html",
@@ -587,13 +592,23 @@ fn build_dashboard(paths: &ProjectPaths) -> Result<DashboardResponse> {
     let recommended_training_backend_id = training::recommended_backend_id(&training_backends);
 
     let mut base_model_options = Vec::new();
-    if wan_training.model_bundle_ready {
+    if training::wan_bundle_ready_for_backend(paths, backend_registry::MUSUBI_WAN_BACKEND_ID) {
         base_model_options.push(BaseModelOption {
             value: "Wan 2.1 T2V 1.3B bundle".to_string(),
             label: "Wan 2.1 T2V 1.3B bundle".to_string(),
             family_id: model_registry::WAN_FAMILY_ID.to_string(),
             family_label: "Wan".to_string(),
             detail: "Resolved from the Wan dependency bundle used by the Musubi training lanes."
+                .to_string(),
+        });
+    }
+    if training::wan_bundle_ready_for_backend(paths, backend_registry::MUSUBI_WAN_14B_BACKEND_ID) {
+        base_model_options.push(BaseModelOption {
+            value: "Wan 2.1 T2V 14B bundle".to_string(),
+            label: "Wan 2.1 T2V 14B bundle".to_string(),
+            family_id: model_registry::WAN_FAMILY_ID.to_string(),
+            family_label: "Wan".to_string(),
+            detail: "Resolved from the larger Wan 2.1 T2V 14B DiT plus the shared Wan dependency bundle."
                 .to_string(),
         });
     }

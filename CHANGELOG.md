@@ -10,6 +10,9 @@
 - Shared registry groundwork for model families, training backends, and training lanes.
 - Family-aware Builder guidance that groups base models, ranks compatible backends, and explains auto-suggested versus manual backend choices.
 - Saved backend-choice state persisted into training plans, saved-plan cards, generated handoff readouts, `plan.json`, and generated per-plan `README.md`.
+- Exploratory `Musubi Tuner / Wan 2.1 T2V 14B` lane support with task-aware handoff generation, 14B DiT detection, and Builder suggestion/ranking that can distinguish `Wan 14B` from the `1.3B` Wan path.
+- Tightened the exploratory `Wan 14B` route around the only local variant that reached live training so far: BF16-loaded DiT weights, lower visible defaults, stronger WSL RAM+swap warnings, persisted per-run logs, and more explicit docs that this lane can still exceed a 32GB-class Windows box even after training starts.
+- Updated the `Wan 14B` docs to frame the lane more honestly: it now clearly says the route shows promise and can reach live training, but it was not validated end to end on the current 32GB test rig because system RAM plus WSL swap appear to be the real limiter. The docs now explicitly invite open-expectation testing and refinement from stronger hardware.
 
 ### Changed
 

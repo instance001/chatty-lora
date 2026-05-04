@@ -26,6 +26,59 @@
     "notes": "Public media repository with image search routed through the Wikimedia API."
   },
   {
+    "id": "pexels-images",
+    "name": "Pexels Images",
+    "base_url": "https://www.pexels.com/search/{query}/?page={page}",
+    "adapter_kind": "generic_gallery_html",
+    "media_kind": "image",
+    "enabled": true,
+    "user_added": false,
+    "crawl_delay_ms": 1500,
+    "pages_per_batch": 3,
+    "respect_robots_txt": true,
+    "notes": "Public Pexels photo search using the generic gallery adapter. Best-effort HTML extraction.",
+    "site_profile": {
+      "media_selector": "img[src*='images.pexels.com/photos/']",
+      "media_attribute": "src"
+    }
+  },
+  {
+    "id": "pexels-videos",
+    "name": "Pexels Videos",
+    "base_url": "https://www.pexels.com/search/videos/{query}/?page={page}",
+    "adapter_kind": "generic_gallery_html",
+    "media_kind": "video",
+    "enabled": true,
+    "user_added": false,
+    "crawl_delay_ms": 1500,
+    "pages_per_batch": 3,
+    "respect_robots_txt": true,
+    "notes": "Public Pexels video search using the generic gallery adapter. Best-effort HTML extraction through visible download links.",
+    "site_profile": {
+      "media_selector": "a[href*='/download/video/']",
+      "media_attribute": "href",
+      "thumbnail_url_template": "https://images.pexels.com/videos/{media_id}/pexels-photo-{media_id}.jpeg?auto=compress&cs=tinysrgb&dpr=1&w=500",
+      "title_template": "Pexels video {media_id}"
+    }
+  },
+  {
+    "id": "pixabay-images",
+    "name": "Pixabay Images",
+    "base_url": "https://pixabay.com/images/search/{query}/?pagi={page}",
+    "adapter_kind": "generic_gallery_html",
+    "media_kind": "image",
+    "enabled": true,
+    "user_added": false,
+    "crawl_delay_ms": 1500,
+    "pages_per_batch": 3,
+    "respect_robots_txt": true,
+    "notes": "Public Pixabay image search using the generic gallery adapter. Best-effort HTML extraction.",
+    "site_profile": {
+      "media_selector": "img[src*='cdn.pixabay.com/photo/']",
+      "media_attribute": "src"
+    }
+  },
+  {
     "id": "openverse-audio",
     "name": "Openverse Audio",
     "base_url": "https://api.openverse.org/v1/audio/",

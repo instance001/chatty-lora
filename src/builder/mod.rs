@@ -843,11 +843,15 @@ fn generate_wan_training_handoff(
     let backend_selection_mode =
         backend_selection_mode_label(spec.backend_selection_manually_overridden);
     let wan_status = training::scan_wan_training(paths);
-    if !wan_status.model_bundle_ready {
+    let selected_backend = training::scan_backends_with_wan_status(paths, wan_status.clone())
+        .into_iter()
+        .find(|backend| backend.id == spec.training_backend_id)
+        .context("could not resolve the selected Wan backend summary")?;
+    if !selected_backend.model_bundle_ready.unwrap_or(false) {
         bail!("Wan 2.1 model files are not complete enough to generate a Musubi handoff yet.");
     }
 
-    let wan_paths = training::selected_wan_paths(paths)
+    let wan_paths = training::selected_wan_paths(paths, &spec.training_backend_id)
         .context("could not resolve the selected Wan model paths")?;
 
     std::fs::create_dir_all(&paths.training_config)
@@ -921,13 +925,11 @@ fn generate_wan_training_handoff(
         format!(
             r#"target_frames = [{target_frames}]
 frame_extraction = "{frame_extraction}"
-source_fps = {source_fps:.1}
 "#,
             target_frames = target_frames.unwrap_or(lane.defaults.target_frames.unwrap_or(17)),
             frame_extraction = frame_extraction
                 .as_deref()
                 .unwrap_or(lane.defaults.frame_extraction.unwrap_or("head")),
-            source_fps = source_fps.unwrap_or(lane.defaults.source_fps.unwrap_or(16.0)),
         )
     } else {
         String::new()
@@ -975,6 +977,12 @@ num_repeats = {repeats}
         dataset_kind,
         training_backend_id: spec.training_backend_id.clone(),
         lane_label: lane.label.to_string(),
+        lane_task: lane.task.to_string(),
+        blocks_to_swap: lane.defaults.blocks_to_swap,
+        route_label: lane.defaults.route_label.to_string(),
+        route_summary: lane.defaults.route_summary.to_string(),
+        hardware_note: lane.defaults.hardware_note.to_string(),
+        exploratory: lane.defaults.exploratory,
         backend_selection_mode: backend_selection_mode.to_string(),
     };
 
@@ -1199,11 +1207,57 @@ struct WanScriptContext {
     dataset_kind: WanDatasetKind,
     training_backend_id: String,
     lane_label: String,
+    lane_task: String,
+    blocks_to_swap: u32,
+    route_label: String,
+    route_summary: String,
+    hardware_note: String,
+    exploratory: bool,
     backend_selection_mode: String,
 }
 
 fn build_preflight_script(context: &WanScriptContext) -> String {
     let media_label = context.dataset_kind.media_label();
+    let wsl_memory_check = if context.lane_task == "t2v-14B" {
+        r#"read_meminfo_kib() {
+  local key="$1"
+  awk -v target="$key" '$1 == target ":" { print $2; exit }' /proc/meminfo
+}
+
+MEM_TOTAL_KIB="$(read_meminfo_kib MemTotal)"
+MEM_AVAILABLE_KIB="$(read_meminfo_kib MemAvailable)"
+SWAP_TOTAL_KIB="$(read_meminfo_kib SwapTotal)"
+SWAP_FREE_KIB="$(read_meminfo_kib SwapFree)"
+COMBINED_TOTAL_KIB="$((MEM_TOTAL_KIB + SWAP_TOTAL_KIB))"
+COMBINED_FREE_KIB="$((MEM_AVAILABLE_KIB + SWAP_FREE_KIB))"
+
+echo "WSL memory check:"
+echo "  RAM total: $((MEM_TOTAL_KIB / 1024 / 1024)) GiB"
+echo "  RAM available: $((MEM_AVAILABLE_KIB / 1024 / 1024)) GiB"
+echo "  Swap total: $((SWAP_TOTAL_KIB / 1024 / 1024)) GiB"
+echo "  Swap free: $((SWAP_FREE_KIB / 1024 / 1024)) GiB"
+
+if (( COMBINED_TOTAL_KIB < 25165824 )); then
+  fail "WSL exposes less than 24 GiB of combined RAM+swap. The Wan 14B lane can be OOM-killed by Linux system memory before GPU usage spikes. Increase WSL memory/swap or switch to the 1.3B lane."
+fi
+
+if (( COMBINED_FREE_KIB < 18874368 )); then
+  fail "WSL currently has less than 18 GiB of free RAM+swap available. Close other WSL-heavy work, increase WSL memory/swap, or switch to the 1.3B lane before retrying Wan 14B."
+fi
+
+if (( COMBINED_TOTAL_KIB < 41943040 )); then
+  warn "WSL has under 40 GiB of combined RAM+swap. The current app author's 32GB Windows test box still OOM-killed the squeezed Wan 14B route after training started, so expect open-ended experimentation here."
+fi
+
+if (( COMBINED_TOTAL_KIB < 33554432 )); then
+  warn "WSL has under 32 GiB of combined RAM+swap. Wan 14B may still OOM on CPU-side block swap pressure even if the GPU looks idle."
+fi
+"#
+        .to_string()
+    } else {
+        "echo \"WSL memory check: current lane does not require the Wan 14B RAM+swap guard.\""
+            .to_string()
+    };
     let media_command_checks = if context.dataset_kind.is_video() {
         "check_command ffmpeg\ncheck_command ffprobe".to_string()
     } else {
@@ -1329,6 +1383,7 @@ bash -n "$GENERATED_DIR/run_all.sh"
 pass "Generated shell scripts passed bash syntax checks"
 
 {media_command_checks}
+{wsl_memory_check}
 
 if command -v rocm_agent_enumerator >/dev/null 2>&1; then
   echo "ROCm agents:"
@@ -1436,6 +1491,7 @@ PY
         metadata_file_name = context.dataset_kind.metadata_file_name(),
         media_path_key = context.dataset_kind.metadata_path_key(),
         media_command_checks = media_command_checks,
+        wsl_memory_check = wsl_memory_check,
         media_probe_python = media_probe_python,
         dit = windows_path_to_wsl(&context.dit_path),
         t5 = windows_path_to_wsl(&context.t5_path),
@@ -1494,6 +1550,21 @@ python src/musubi_tuner/wan_cache_text_encoder_outputs.py \
 }
 
 fn build_launch_script(context: &WanScriptContext) -> String {
+    let fp8_base_flag = if context.lane_task == "t2v-14B" {
+        ""
+    } else {
+        "  --fp8_base \\\n"
+    };
+    let fp8_scaled_flag = if context.lane_task == "t2v-14B" {
+        ""
+    } else {
+        "  --fp8_scaled \\\n"
+    };
+    let gradient_checkpointing_cpu_offload_flag = if context.lane_task == "t2v-14B" {
+        ""
+    } else {
+        "  --gradient_checkpointing_cpu_offload \\\n"
+    };
     format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
@@ -1505,19 +1576,16 @@ cd "$MUSUBI_ROOT"
 source .venv/bin/activate
 
 accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 src/musubi_tuner/wan_train_network.py \
-  --task t2v-1.3B \
+  --task {task} \
   --dit "{dit}" \
   --dataset_config "{dataset_config}" \
   --sdpa \
   --split_attn \
   --mixed_precision bf16 \
-  --fp8_base \
-  --fp8_scaled \
-  --optimizer_type AdamW \
+{fp8_base_flag}{fp8_scaled_flag}  --optimizer_type AdamW \
   --learning_rate {learning_rate} \
   --gradient_checkpointing \
-  --gradient_checkpointing_cpu_offload \
-  --blocks_to_swap 20 \
+{gradient_checkpointing_cpu_offload_flag}  --blocks_to_swap {blocks_to_swap} \
   --img_in_txt_in_offloading \
   --max_data_loader_n_workers 1 \
   --network_module networks.lora_wan \
@@ -1532,9 +1600,14 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 src/mus
   --output_name "{output_name}"
 "#,
         env_prefix = training::WSL_ENV_PREFIX,
+        task = context.lane_task,
         dit = windows_path_to_wsl(&context.dit_path),
         dataset_config = windows_path_to_wsl(&context.dataset_toml_path),
+        fp8_base_flag = fp8_base_flag,
+        fp8_scaled_flag = fp8_scaled_flag,
+        gradient_checkpointing_cpu_offload_flag = gradient_checkpointing_cpu_offload_flag,
         learning_rate = context.learning_rate,
+        blocks_to_swap = context.blocks_to_swap,
         rank = context.rank,
         epochs = context.epochs,
         output_dir = windows_path_to_wsl(&context.output_dir.join("loras")),
@@ -1580,9 +1653,10 @@ fn build_generated_readme(context: &WanScriptContext, video_count: usize) -> Str
     format!(
         r#"# Wan 2.1 Musubi {media_label} handoff: {project}
 
-This folder was generated by Chatty-lora for the first Wan 2.1 T2V 1.3B training lane.
+This folder was generated by Chatty-lora for the Wan/Musubi training lane named below.
 
 Training lane: {lane_label}
+Task: {lane_task}
 Backend id: {training_backend_id}
 Backend selection: {backend_selection_mode}
 
@@ -1614,8 +1688,12 @@ Low-VRAM notes:
 
 - `cache_latents.sh` runs VAE latent caching on CPU.
 - `cache_text.sh` runs T5 text-encoder caching on CPU without fp8.
-- `launch.sh` still trains on the GPU, but uses split attention, FP8-scaled Wan weights, input offload, and block swapping to reduce dedicated VRAM pressure.
-- This route is slower than a high-VRAM trainer, but it is the conservative proven Chatty-lora path for cautious 8GB AMD/Radeon tests.
+- `launch.sh` still trains on the GPU, but uses split attention, input offload, and block swapping to reduce dedicated VRAM pressure.
+- The exploratory 14B route currently prefers BF16-loaded DiT weights on this WSL + ROCm path because the local FP8 weight-cast route failed earlier than the BF16-load route during testing.
+- Route profile: {route_label}
+- Route note: {route_summary}
+- Hardware note: {hardware_note}
+{exploratory_note}
 - This {media_label} lane uses the same Wan model family as the video lane, so it is meant to teach visual identity/style foundations before later video refinement.
 
 If Musubi changes command flags later, edit the shell scripts in this folder before running.
@@ -1623,7 +1701,16 @@ If Musubi changes command flags later, edit the shell scripts in this folder bef
         project = context.project_slug,
         media_label = media_label,
         lane_label = context.lane_label,
+        lane_task = context.lane_task,
         training_backend_id = context.training_backend_id,
+        route_label = context.route_label,
+        route_summary = context.route_summary,
+        hardware_note = context.hardware_note,
+        exploratory_note = if context.exploratory {
+            "- This lane is exploratory in Chatty-lora, so expect more tuning and stronger hardware requirements than the default 1.3B route."
+        } else {
+            "- This is the conservative proven Chatty-lora route for cautious consumer-GPU tests."
+        },
         backend_selection_mode = context.backend_selection_mode,
         media_label_title = titlecase_ascii(media_label),
         video_count = video_count,

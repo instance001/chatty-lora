@@ -1,12 +1,16 @@
 # Wan Dependency Folder
 
-This folder holds the training dependencies for the first real Chatty-lora training lane:
+This folder holds the training dependencies for Chatty-lora's current Wan/Musubi lanes.
+
+Right now that means:
 
 ```text
 Musubi Tuner / Wan 2.1 T2V 1.3B
+Musubi Tuner / Wan 2.1 T2V 1.3B / Image visual LoRA
+Musubi Tuner / Wan 2.1 T2V 14B
 ```
 
-This is the small Wan video model lane we are proving first before expanding to bigger Wan models, VACE, Wan 2.2, Flux, or other families.
+The `1.3B` lanes are still the proven starter path. The `14B` lane is present as an exploratory heavier route, not the default beginner recommendation. On the current app author's WSL + ROCm test rig, the only `14B` handoff that reached live training used BF16-loaded weights rather than the earlier FP8 weight-cast path, and it still could not be validated end to end. The current evidence suggests the limiter is system RAM plus WSL swap more than the 8GB GPU itself, and that this lane likely wants slightly more than a 32GB-class Windows box for reliable completion. Proceed with open expectations. If you test, refine, or improve the route on stronger hardware, that feedback is welcomed and appreciated.
 
 ## Family Layout
 
@@ -28,11 +32,13 @@ This `README.md` lives inside `models/wan/dependencies/`, which is the training-
 
 ### DiT
 
-Put one or both DiT files in:
+Put the DiT files in:
 
 ```text
 models/wan/dependencies/dit/
 ```
+
+#### For the proven `1.3B` lanes
 
 Preferred:
 
@@ -53,7 +59,23 @@ Wan2_1-T2V-1_3B_bf16.safetensors
 Wan2_1-T2V-1_3B_fp16.safetensors
 ```
 
-Chatty-lora's preflight accepts the known variants. If a provider renames the files again, keep the model family obvious in the name and we can add another detection pattern.
+#### For the exploratory `14B` lane
+
+Preferred:
+
+```text
+wan2.1_t2v_14B_bf16.safetensors
+```
+
+Fallback:
+
+```text
+wan2.1_t2v_14B_fp16.safetensors
+```
+
+Chatty-lora currently looks for those exact `14B` names. If a provider renames the files later, keep the `Wan 2.1 T2V 14B` identity obvious in the filename and we can extend detection.
+
+For `1.3B`, Chatty-lora's preflight already accepts the known capitalization variants. If a provider renames files again, keep the model family obvious in the name and we can add another detection pattern.
 
 ### VAE
 
@@ -97,7 +119,7 @@ Expected file:
 models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth
 ```
 
-For the current T2V training lane, CLIP is not the most important piece. We keep it here because it is part of the wider Wan 2.1 toolchain and useful for future I2V/reference work.
+For the current T2V lanes, CLIP is not the most important piece. We keep it here because it is part of the wider Wan 2.1 toolchain and useful for future I2V/reference work.
 
 ## Optional GGUF Files
 
@@ -111,6 +133,7 @@ Examples:
 
 ```text
 wan2.1_t2v_1.3b-q4_0.gguf
+wan2.1-t2v-14b-Q4_K_M.gguf
 ```
 
 These GGUF inference copies are not used by the Musubi training path. They live in the family `gguf` bucket for convenience, but they are not required for LoRA training.
@@ -123,6 +146,8 @@ Recommended search terms:
 
 - `Comfy-Org Wan_2.1_ComfyUI_repackaged split_files diffusion_models wan2.1_t2v_1.3B_bf16.safetensors`
 - `Comfy-Org Wan_2.1_ComfyUI_repackaged split_files diffusion_models wan2.1_t2v_1.3B_fp16.safetensors`
+- `Comfy-Org Wan_2.1_ComfyUI_repackaged split_files diffusion_models wan2.1_t2v_14B_bf16.safetensors`
+- `Comfy-Org Wan_2.1_ComfyUI_repackaged split_files diffusion_models wan2.1_t2v_14B_fp16.safetensors`
 - `Comfy-Org Wan_2.1_ComfyUI_repackaged split_files vae wan_2.1_vae.safetensors`
 - `Wan-AI Wan2.1-I2V-14B-720P models_t5_umt5-xxl-enc-bf16.pth`
 - `Wan-AI Wan2.1-I2V-14B-720P models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth`
@@ -155,13 +180,14 @@ For very large files, the command line is often less painful than browser downlo
 Useful prompt:
 
 ```text
-I am setting up Chatty-lora's Wan 2.1 T2V 1.3B Musubi training lane. Please find the current Hugging Face pages for the Wan 2.1 T2V 1.3B DiT, Wan 2.1 VAE, UMT5 text encoder, and optional CLIP encoder. I need filenames and which local folder each file should go in. Please avoid Wan 2.2, VACE, and 14B models unless I ask for them.
+I am setting up Chatty-lora's Wan 2.1 Musubi training lanes. Please find the current Hugging Face pages for the Wan 2.1 T2V 1.3B DiT, the Wan 2.1 T2V 14B DiT, the Wan 2.1 VAE, the UMT5 text encoder, and the optional CLIP encoder. I need filenames and which local folder each file should go in. Please separate the 1.3B and 14B DiT names clearly, and avoid Wan 2.2 or VACE unless I ask.
 ```
 
-The important thing is matching the model family:
+The important thing is matching the lane on purpose:
 
 ```text
 Wan 2.1 T2V 1.3B
+Wan 2.1 T2V 14B
 ```
 
-Do not mix random Wan 14B, Wan 2.2, VACE, Fun Control, or inference-only GGUF files into the required training slots unless we intentionally add a new lane for them.
+Do not mix random Wan 14B, Wan 2.2, VACE, Fun Control, or inference-only GGUF files into the required training slots unless they match the lane you actually intend to run.

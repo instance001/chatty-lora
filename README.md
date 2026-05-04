@@ -55,6 +55,8 @@ There are now two early Wan/Musubi foundations:
 - `Video motion lane` for video clips and motion/style experiments
 - `Image visual lane` for still-image identity, object, and style concepts trained into the same Wan 2.1 T2V family
 
+There is also an early `Wan 2.1 T2V 14B` lane in the app now. It uses the same Musubi handoff workflow, but it is intentionally treated as exploratory rather than the default proven path because it is materially heavier on VRAM and system memory than the first `1.3B` route. Chatty-lora now squeezes that lane down on purpose for first-pass survival: very low resolution, fewer frames, tiny rank, and near-maximum block swap before you try to scale quality back up. On the current WSL + ROCm test rig, the only `14B` route that reached live training used BF16-loaded weights rather than the earlier FP8 weight-cast path, and it still could not be validated end to end. The current author test box appears to run out of system RAM plus WSL swap before a full training step completes, while the 8GB GPU is not the first limit to trip. Treat the lane as promising but experimental, proceed with open expectations, and expect it to want a little more than a 32GB-class Windows box for reliable end-to-end runs. Testing, refining, and reports from stronger hardware are welcomed and appreciated.
+
 The app runner is intentionally scoped to saved Wan/Musubi plan cards. It does not yet train arbitrary model families, manage multiple simultaneous jobs, or provide a full historical run database. Manual PowerShell/WSL commands remain visible as the fallback path when a driver, ROCm, or Musubi issue needs closer inspection.
 
 Under the hood, Chatty-lora now keeps this groundwork separate on purpose:
@@ -410,6 +412,8 @@ Trainer:
 Wan 2.1 model files for these Wan lanes:
 - DiT: search `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_1.3B_bf16.safetensors`
 - fallback DiT: search `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_1.3B_fp16.safetensors`
+- 14B DiT: search `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_14B_bf16.safetensors`
+- 14B fallback DiT: search `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_14B_fp16.safetensors`
 - VAE: search `Comfy-Org Wan_2.1_ComfyUI_repackaged wan_2.1_vae.safetensors`
 - T5: search `Wan-AI Wan2.1-I2V-14B-720P models_t5_umt5-xxl-enc-bf16.pth`
 - CLIP, optional for future I2V/reference work: search `Wan-AI Wan2.1-I2V-14B-720P models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth`

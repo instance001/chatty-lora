@@ -2,8 +2,10 @@ use crate::model_registry;
 
 pub const MUSUBI_WAN_BACKEND_ID: &str = "musubi_wan21_t2v_1_3b";
 pub const MUSUBI_WAN_IMAGE_BACKEND_ID: &str = "musubi_wan21_t2v_1_3b_image";
+pub const MUSUBI_WAN_14B_BACKEND_ID: &str = "musubi_wan21_t2v_14b";
 pub const MUSUBI_WAN_LABEL: &str = "Musubi Tuner / Wan 2.1 T2V 1.3B";
 pub const MUSUBI_WAN_IMAGE_LABEL: &str = "Musubi Tuner / Wan 2.1 T2V 1.3B / Image visual LoRA";
+pub const MUSUBI_WAN_14B_LABEL: &str = "Musubi Tuner / Wan 2.1 T2V 14B";
 
 #[derive(Clone, Copy)]
 pub struct BackendDefinition {
@@ -35,6 +37,19 @@ pub const BACKENDS: &[BackendDefinition] = &[
         name: MUSUBI_WAN_IMAGE_LABEL,
         description: "A sibling Wan/Musubi lane that trains still-image visual concepts into the same Wan 2.1 T2V 1.3B model family.",
         best_for: "Wan visual identity, character, object, and style LoRAs from still images before moving into video refinement.",
+        compatible_family_ids: &[model_registry::WAN_FAMILY_ID],
+        folder_candidates: &["musubi_tuner", "musubi-tuner"],
+        marker_files: &[
+            "src/musubi_tuner/wan_train_network.py",
+            "src/musubi_tuner/wan_cache_latents.py",
+            "src/musubi_tuner/wan_cache_text_encoder_outputs.py",
+        ],
+    },
+    BackendDefinition {
+        id: MUSUBI_WAN_14B_BACKEND_ID,
+        name: MUSUBI_WAN_14B_LABEL,
+        description: "An exploratory Wan video lane for the larger Wan 2.1 T2V 14B DiT inside the same Musubi Tuner workflow.",
+        best_for: "Larger-capacity Wan 2.1 video LoRAs when you intentionally want the 14B path and have much stronger hardware than the first 1.3B smoke-test lane.",
         compatible_family_ids: &[model_registry::WAN_FAMILY_ID],
         folder_candidates: &["musubi_tuner", "musubi-tuner"],
         marker_files: &[

@@ -713,20 +713,35 @@ textarea {
 }
 
 .preview-thumb {
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1 / 1;
+  min-height: 240px;
   display: grid;
   place-items: center;
   overflow: hidden;
+  padding: 10px;
   border-radius: 16px;
   background: rgba(15, 108, 116, 0.08);
   border: 1px solid rgba(15, 108, 116, 0.1);
 }
 
-.preview-thumb img,
+.preview-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: rgba(15, 108, 116, 0.08);
+}
+
+.preview-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: rgba(15, 108, 116, 0.12);
+}
+
 .preview-thumb audio {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .preview-fallback {

@@ -12,6 +12,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use tokio::{
+    fs::OpenOptions,
+    io::AsyncWriteExt,
     io::{AsyncBufReadExt, BufReader},
     process::Command,
     sync::Mutex,
@@ -70,6 +72,7 @@ struct RunnerInner {
     started_unix_seconds: Option<u64>,
     ended_unix_seconds: Option<u64>,
     process_id: Option<u32>,
+    log_file: Option<PathBuf>,
     stages: Vec<TrainingStageStatus>,
     logs: VecDeque<TrainingLogLine>,
     output_files: Vec<String>,
@@ -112,6 +115,7 @@ impl TrainingRunner {
     ) -> Result<TrainingRunStatus> {
         let run = resolve_training_run(&paths, request)?;
         let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+        let log_file = prepare_run_log_file(&paths, &run.project_slug, job_id)?;
 
         {
             let mut inner = self.inner.lock().await;
@@ -132,6 +136,7 @@ impl TrainingRunner {
             inner.started_unix_seconds = Some(unix_now());
             inner.ended_unix_seconds = None;
             inner.process_id = None;
+            inner.log_file = Some(log_file.clone());
             inner.stages = run
                 .stages
                 .iter()
@@ -146,6 +151,12 @@ impl TrainingRunner {
             inner.output_files.clear();
         }
 
+        self.push_log(
+            "runner",
+            "system",
+            &format!("Run log will be written to {}.", display_path(&log_file)),
+        )
+        .await;
         self.push_log("runner", "system", "Starting guided training sequence.")
             .await;
 
@@ -311,15 +322,30 @@ impl TrainingRunner {
     }
 
     async fn push_log(&self, stage_id: &str, stream: &str, line: &str) {
-        let mut inner = self.inner.lock().await;
-        inner.logs.push_back(TrainingLogLine {
-            unix_seconds: unix_now(),
-            stage_id: stage_id.to_string(),
-            stream: stream.to_string(),
-            line: line.to_string(),
-        });
-        while inner.logs.len() > MAX_LOG_LINES {
-            inner.logs.pop_front();
+        let unix_seconds = unix_now();
+        let log_file = {
+            let mut inner = self.inner.lock().await;
+            inner.logs.push_back(TrainingLogLine {
+                unix_seconds,
+                stage_id: stage_id.to_string(),
+                stream: stream.to_string(),
+                line: line.to_string(),
+            });
+            while inner.logs.len() > MAX_LOG_LINES {
+                inner.logs.pop_front();
+            }
+            inner.log_file.clone()
+        };
+        if let Some(path) = log_file {
+            let formatted = format!("[{}] {} {} | {}\n", unix_seconds, stage_id, stream, line);
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .await
+            {
+                let _ = file.write_all(formatted.as_bytes()).await;
+            }
         }
     }
 
@@ -352,12 +378,16 @@ impl TrainingRunner {
         inner.state = "succeeded".to_string();
         inner.current_stage = None;
         inner.message = if output_files.is_empty() {
-            "Training sequence finished, but no LoRA output file was found yet.".to_string()
+            format!(
+                "Training sequence finished, but no LoRA output file was found yet. {}",
+                log_file_hint(inner.log_file.as_deref())
+            )
         } else {
             format!(
-                "Training sequence finished. {} LoRA output file{} found.",
+                "Training sequence finished. {} LoRA output file{} found. {}",
                 output_files.len(),
-                if output_files.len() == 1 { "" } else { "s" }
+                if output_files.len() == 1 { "" } else { "s" },
+                log_file_hint(inner.log_file.as_deref())
             )
         };
         inner.ended_unix_seconds = Some(unix_now());
@@ -370,7 +400,7 @@ impl TrainingRunner {
         inner.active = false;
         inner.cancel_requested = false;
         inner.state = "failed".to_string();
-        inner.message = message.to_string();
+        inner.message = format!("{message} {}", log_file_hint(inner.log_file.as_deref()));
         inner.ended_unix_seconds = Some(unix_now());
         inner.process_id = None;
     }
@@ -380,7 +410,7 @@ impl TrainingRunner {
         inner.active = false;
         inner.cancel_requested = false;
         inner.state = "cancelled".to_string();
-        inner.message = message.to_string();
+        inner.message = format!("{message} {}", log_file_hint(inner.log_file.as_deref()));
         inner.ended_unix_seconds = Some(unix_now());
         inner.process_id = None;
     }
@@ -500,8 +530,35 @@ fn status_from_inner(inner: &RunnerInner) -> TrainingRunStatus {
         process_id: inner.process_id,
         stages: inner.stages.clone(),
         logs: inner.logs.iter().cloned().collect(),
+        log_file: inner.log_file.as_ref().map(|path| display_path(path)),
         output_files: inner.output_files.clone(),
     }
+}
+
+fn prepare_run_log_file(paths: &ProjectPaths, project_slug: &str, job_id: u64) -> Result<PathBuf> {
+    let log_dir = paths.training_outputs.join(project_slug).join("logs");
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("could not create {}", log_dir.display()))?;
+    let file_name = format!("run-{}-job{}.log", unix_now(), job_id);
+    let log_path = log_dir.join(file_name);
+    std::fs::write(
+        &log_path,
+        format!(
+            "Chatty-lora training run log\nproject: {project_slug}\njob_id: {job_id}\nstarted_unix_seconds: {}\n\n",
+            unix_now()
+        ),
+    )
+    .with_context(|| format!("could not initialize {}", log_path.display()))?;
+    Ok(log_path)
+}
+
+fn log_file_hint(path: Option<&Path>) -> String {
+    path.map(|path| format!("Run log: {}.", display_path(path)))
+        .unwrap_or_else(|| "Run log path unavailable.".to_string())
+}
+
+fn display_path(path: &Path) -> String {
+    path.display().to_string()
 }
 
 fn windows_path_to_wsl(path: &Path) -> String {

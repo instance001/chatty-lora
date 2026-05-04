@@ -366,8 +366,11 @@ This tells Chatty-lora which trainer family the plan is shaped for.
 The first real backend targets are:
 - `Musubi Tuner / Wan 2.1 T2V 1.3B`
 - `Musubi Tuner / Wan 2.1 T2V 1.3B / Image visual LoRA`
+- `Musubi Tuner / Wan 2.1 T2V 14B`
 
 Choosing a backend does not start training by itself. It shapes the saved plan and generated WSL files. Once the plan card is saved and marked ready, the `Run this saved plan` button can launch the sequence.
+
+The `Wan 2.1 T2V 14B` option is intentionally not framed as the default safe starter route. It uses the same Musubi handoff shape, but it is much heavier than the proven `1.3B` lane and should be treated as an intentional stronger-hardware experiment. Chatty-lora now squeezes that lane down on purpose for first-pass survival: very low resolution, fewer frames, tiny rank, and near-maximum block swap before you try to scale it back up. On the current WSL + ROCm test rig, the only `14B` route that reached live training used BF16-loaded weights instead of the earlier FP8 weight-cast path, and it still could not be validated end to end. On the current author test box, the likely limiter is system RAM plus WSL swap rather than the 8GB GPU itself, and the lane appears to want slightly more than a 32GB-class Windows setup for reliable completion. Proceed with open expectations, and please treat successful testing, refinements, and stronger-hardware reports as genuinely helpful contributions back to the project.
 
 The Builder now helps more actively here:
 - it groups base models by family
@@ -831,6 +834,8 @@ Use these search terms:
 Use these search terms:
 - `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_1.3B_bf16.safetensors`
 - `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_1.3B_fp16.safetensors`
+- `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_14B_bf16.safetensors`
+- `Comfy-Org Wan_2.1_ComfyUI_repackaged wan2.1_t2v_14B_fp16.safetensors`
 - `Comfy-Org Wan_2.1_ComfyUI_repackaged wan_2.1_vae.safetensors`
 - `Wan-AI Wan2.1-I2V-14B-720P models_t5_umt5-xxl-enc-bf16.pth`
 - `Wan-AI Wan2.1-I2V-14B-720P models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth`

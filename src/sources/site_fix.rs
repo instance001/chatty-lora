@@ -28,7 +28,10 @@ const DEFAULT_GENERIC_PROFILE_JSON: &str = r#"{
   "thumbnail_selector": "img",
   "thumbnail_attribute": "src",
   "link_selector": "a",
-  "link_attribute": "href"
+  "link_attribute": "href",
+  "thumbnail_url_template": "https://example.com/thumbs/{basename}",
+  "title_template": "{title}",
+  "source_page_url_template": "{source_page_url}"
 }"#;
 
 #[derive(Debug, Default, Clone)]
@@ -790,6 +793,10 @@ struct GenericGalleryProfileDraft {
     thumbnail_attribute: Option<String>,
     link_selector: Option<String>,
     link_attribute: Option<String>,
+    media_url_template: Option<String>,
+    thumbnail_url_template: Option<String>,
+    title_template: Option<String>,
+    source_page_url_template: Option<String>,
 }
 
 fn build_generic_gallery_connection_fix(
@@ -868,6 +875,13 @@ fn generic_gallery_profile_from_draft(
         clean_optional_attribute("thumbnail_attribute", draft.thumbnail_attribute)?;
     let link_attribute = clean_optional_attribute("link_attribute", draft.link_attribute)?
         .or_else(|| draft.link_selector.as_ref().map(|_| "href".to_string()));
+    let media_url_template =
+        clean_optional_template("media_url_template", draft.media_url_template)?;
+    let thumbnail_url_template =
+        clean_optional_template("thumbnail_url_template", draft.thumbnail_url_template)?;
+    let title_template = clean_optional_template("title_template", draft.title_template)?;
+    let source_page_url_template =
+        clean_optional_template("source_page_url_template", draft.source_page_url_template)?;
 
     Ok(GenericGalleryProfile {
         item_selector: clean_optional_field(draft.item_selector),
@@ -879,6 +893,10 @@ fn generic_gallery_profile_from_draft(
         thumbnail_attribute,
         link_selector: clean_optional_field(draft.link_selector),
         link_attribute,
+        media_url_template,
+        thumbnail_url_template,
+        title_template,
+        source_page_url_template,
     })
 }
 
@@ -993,6 +1011,31 @@ fn parse_profile_key_values(text: &str) -> Option<GenericGalleryProfileDraft> {
             &mut values,
             &["link_attribute", "link_attr", "page_attribute"],
         ),
+        media_url_template: remove_first(
+            &mut values,
+            &[
+                "media_url_template",
+                "media_template",
+                "download_url_template",
+            ],
+        ),
+        thumbnail_url_template: remove_first(
+            &mut values,
+            &[
+                "thumbnail_url_template",
+                "thumb_url_template",
+                "poster_url_template",
+            ],
+        ),
+        title_template: remove_first(&mut values, &["title_template", "name_template"]),
+        source_page_url_template: remove_first(
+            &mut values,
+            &[
+                "source_page_url_template",
+                "detail_url_template",
+                "page_url_template",
+            ],
+        ),
     })
 }
 
@@ -1017,6 +1060,14 @@ fn clean_optional_attribute(label: &str, value: Option<String>) -> Result<Option
         return Ok(None);
     };
     validate_attribute(label, &value)?;
+    Ok(Some(value))
+}
+
+fn clean_optional_template(label: &str, value: Option<String>) -> Result<Option<String>> {
+    let Some(value) = clean_optional_field(value) else {
+        return Ok(None);
+    };
+    validate_template(label, &value)?;
     Ok(Some(value))
 }
 
@@ -1065,6 +1116,20 @@ fn validate_url_template(label: &str, value: &str) -> Result<String> {
         )
     })?;
     Ok(cleaned)
+}
+
+fn validate_template(label: &str, value: &str) -> Result<()> {
+    let cleaned = value.trim();
+    if cleaned.is_empty() {
+        return Err(anyhow!("{} cannot be empty.", label));
+    }
+    if cleaned.contains('\n') || cleaned.contains('\r') {
+        return Err(anyhow!(
+            "{} must stay on one line so it can be stored safely in the source profile.",
+            label
+        ));
+    }
+    Ok(())
 }
 
 fn generic_connection_apply_notes(connection_fix: &GenericGalleryConnectionFix) -> Vec<String> {
@@ -1770,6 +1835,10 @@ fn infer_generic_profile_from_document(
         thumbnail_attribute: (media_selector == "img[src]").then(|| "src".to_string()),
         link_selector: Some("a".to_string()),
         link_attribute: Some("href".to_string()),
+        media_url_template: None,
+        thumbnail_url_template: None,
+        title_template: None,
+        source_page_url_template: None,
     }
 }
 
@@ -1864,6 +1933,26 @@ fn generic_profile_json(
         &mut object,
         "link_attribute",
         profile.link_attribute.as_deref(),
+    );
+    insert_json_string(
+        &mut object,
+        "media_url_template",
+        profile.media_url_template.as_deref(),
+    );
+    insert_json_string(
+        &mut object,
+        "thumbnail_url_template",
+        profile.thumbnail_url_template.as_deref(),
+    );
+    insert_json_string(
+        &mut object,
+        "title_template",
+        profile.title_template.as_deref(),
+    );
+    insert_json_string(
+        &mut object,
+        "source_page_url_template",
+        profile.source_page_url_template.as_deref(),
     );
 
     serde_json::to_string_pretty(&serde_json::Value::Object(object))
@@ -2086,7 +2175,7 @@ fn build_patch_sketch(
             let profile_json =
                 inspected_generic_profile_json.unwrap_or(DEFAULT_GENERIC_PROFILE_JSON);
             format!(
-                "Issue focus: {summary}\nReproduction notes: {reproduction}\n\nSuggested touch points:\n- {touch_line}\n- URL template, if the site exposes page numbers in links\n- title / thumb / media-link extraction selectors\n- source/detail page link selector if previews need attribution\n\nSource connection profile draft:\n```json\n{profile_json}\n```\n\nHow to apply:\n- Copy this JSON into Patch notes.\n- If the suggested URL template looks wrong, edit only `base_url_template` or remove that line before review.\n- Generate adapter patch review.\n- Apply after the diff shows only this source's config/sources.json entry changing.\n\nReview note:\n- Do not generalise this into crawler core. The safe apply path stores a validated selector profile and/or URL template for this one source, while {adapter_rel} stays unchanged."
+                "Issue focus: {summary}\nReproduction notes: {reproduction}\n\nSuggested touch points:\n- {touch_line}\n- URL template, if the site exposes page numbers in links\n- title / thumb / media-link extraction selectors\n- source/detail page link selector if previews need attribution\n- derived templates when the page exposes separate download, poster, or detail URLs\n\nSource connection profile draft:\n```json\n{profile_json}\n```\n\nTemplate placeholders you can use:\n- {{media_url}}, {{source_page_url}}, {{title}}\n- {{media_id}}, {{basename}}, {{basename_stem}}, {{media_path}}\n\nHow to apply:\n- Copy this JSON into Patch notes.\n- If the suggested URL template looks wrong, edit only `base_url_template` or remove that line before review.\n- Use derived templates when the site has the right material but the card is still too dumb to show it cleanly.\n- Generate adapter patch review.\n- Apply after the diff shows only this source's config/sources.json entry changing.\n\nReview note:\n- Do not generalise this into crawler core. The safe apply path stores a validated selector profile and/or URL template for this one source, while {adapter_rel} stays unchanged."
             )
         }
         _ => format!(

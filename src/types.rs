@@ -222,6 +222,9 @@ pub struct TrainingBackendSummary {
     pub lane_task: Option<String>,
     pub compatible_family_ids: Vec<String>,
     pub compatible_family_labels: Vec<String>,
+    pub model_bundle_ready: Option<bool>,
+    pub selected_dit_relative_path: Option<String>,
+    pub recommended_defaults: Option<WanTrainingDefaults>,
     pub ready: bool,
     pub relative_path: Option<String>,
     pub notes: Vec<String>,
@@ -252,6 +255,11 @@ pub struct WanTrainingDefaults {
     pub rank: u32,
     pub epochs: u32,
     pub learning_rate: f32,
+    pub blocks_to_swap: u32,
+    pub route_label: String,
+    pub route_summary: String,
+    pub hardware_note: String,
+    pub exploratory: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -360,6 +368,14 @@ pub struct GenericGalleryProfile {
     pub link_selector: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_attribute: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_url_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_page_url_template: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -622,6 +638,7 @@ pub struct TrainingRunStatus {
     pub process_id: Option<u32>,
     pub stages: Vec<TrainingStageStatus>,
     pub logs: Vec<TrainingLogLine>,
+    pub log_file: Option<String>,
     pub output_files: Vec<String>,
 }
 

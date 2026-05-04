@@ -553,6 +553,40 @@ mod tests {
             Some(900)
         ));
     }
+
+    #[test]
+    fn extracts_pexels_video_id_from_download_url() {
+        assert_eq!(
+            pexels_video_id("https://www.pexels.com/download/video/6314344/"),
+            Some("6314344")
+        );
+    }
+
+    #[test]
+    fn extracts_pexels_video_id_from_video_file_url() {
+        assert_eq!(
+            pexels_video_id(
+                "https://videos.pexels.com/video-files/6314344/6314344-hd_1920_1080_25fps.mp4"
+            ),
+            Some("6314344")
+        );
+    }
+
+    #[test]
+    fn renders_profile_template_with_media_placeholders() {
+        let rendered = render_profile_template(
+            "https://images.pexels.com/videos/{media_id}/pexels-photo-{media_id}.jpeg?name={basename_stem}",
+            "https://www.pexels.com/download/video/6314344/",
+            Some("Download"),
+            None,
+            "https://www.pexels.com/video/6314344/",
+        );
+
+        assert_eq!(
+            rendered,
+            "https://images.pexels.com/videos/6314344/pexels-photo-6314344.jpeg?name=6314344"
+        );
+    }
 }
 
 async fn robots_allows(client: &Client, page_url: &Url) -> Result<bool> {
@@ -738,32 +772,18 @@ fn profile_item_from_element(
     requested_media_kinds: &[String],
     seen: &mut BTreeSet<String>,
 ) -> Option<PreviewItem> {
-    let media_url = absolutize_profile_attr(page_url, media_element, &profile.media_attribute)?;
-    let kind = media_kind_from_url(&media_url)
-        .or_else(|| profile_kind_from_context(&source.media_kind, &profile.media_selector))?;
-    if !matches_media_focus(&source.media_kind, kind)
-        || !matches_requested_media(requested_media_kinds, kind)
-        || !seen.insert(media_url.clone())
-    {
-        return None;
-    }
-
-    let title = profile_title(card, media_element, profile)
-        .unwrap_or_else(|| title_from_url(&media_url, &kind.to_ascii_lowercase()));
-    let thumbnail_url = profile
-        .thumbnail_selector
-        .as_deref()
-        .and_then(|selector| {
-            profile_selected_url(
-                card,
-                media_element,
-                page_url,
-                selector,
-                profile.thumbnail_attribute.as_deref(),
-            )
-        })
-        .or_else(|| (kind == "Image").then(|| media_url.clone()));
-    let source_page_url = profile
+    let raw_media_url = absolutize_profile_attr(page_url, media_element, &profile.media_attribute)?;
+    let base_title = profile_title(card, media_element, profile);
+    let base_thumbnail_url = profile.thumbnail_selector.as_deref().and_then(|selector| {
+        profile_selected_url(
+            card,
+            media_element,
+            page_url,
+            selector,
+            profile.thumbnail_attribute.as_deref(),
+        )
+    });
+    let base_source_page_url = profile
         .link_selector
         .as_deref()
         .and_then(|selector| {
@@ -776,6 +796,75 @@ fn profile_item_from_element(
             )
         })
         .unwrap_or_else(|| page_url.as_str().to_string());
+
+    let media_url = profile
+        .media_url_template
+        .as_deref()
+        .map(|template| {
+            render_profile_template(
+                template,
+                &raw_media_url,
+                base_title.as_deref(),
+                None,
+                &base_source_page_url,
+            )
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| raw_media_url.clone());
+    let kind = media_kind_from_url(&media_url)
+        .or_else(|| profile_kind_from_context(&source.media_kind, &profile.media_selector))?;
+    if !matches_media_focus(&source.media_kind, kind)
+        || !matches_requested_media(requested_media_kinds, kind)
+    {
+        return None;
+    }
+
+    let mut title =
+        base_title.unwrap_or_else(|| title_from_url(&media_url, &kind.to_ascii_lowercase()));
+    let mut thumbnail_url =
+        base_thumbnail_url.or_else(|| (kind == "Image").then(|| media_url.clone()));
+    let mut source_page_url = base_source_page_url;
+
+    enrich_known_video_preview_metadata(
+        source,
+        &media_url,
+        &kind,
+        &mut title,
+        &mut thumbnail_url,
+        &mut source_page_url,
+    );
+
+    if let Some(template) = profile.thumbnail_url_template.as_deref() {
+        thumbnail_url = Some(render_profile_template(
+            template,
+            &media_url,
+            Some(&title),
+            thumbnail_url.as_deref(),
+            &source_page_url,
+        ));
+    }
+    if let Some(template) = profile.title_template.as_deref() {
+        title = render_profile_template(
+            template,
+            &media_url,
+            Some(&title),
+            thumbnail_url.as_deref(),
+            &source_page_url,
+        );
+    }
+    if let Some(template) = profile.source_page_url_template.as_deref() {
+        source_page_url = render_profile_template(
+            template,
+            &media_url,
+            Some(&title),
+            thumbnail_url.as_deref(),
+            &source_page_url,
+        );
+    }
+
+    if !seen.insert(media_url.clone()) {
+        return None;
+    }
 
     Some(PreviewItem {
         key: format!("{}::{}::{}", source.id, page_number, media_url),
@@ -794,6 +883,82 @@ fn profile_item_from_element(
         page_number,
         kind: kind.to_string(),
     })
+}
+
+fn enrich_known_video_preview_metadata(
+    source: &SourceEntry,
+    media_url: &str,
+    kind: &str,
+    title: &mut String,
+    thumbnail_url: &mut Option<String>,
+    _source_page_url: &mut String,
+) {
+    if kind != "Video" {
+        return;
+    }
+
+    if let Some(video_id) = pexels_video_id(media_url) {
+        if thumbnail_url.is_none() {
+            *thumbnail_url = Some(format!(
+                "https://images.pexels.com/videos/{video_id}/pexels-photo-{video_id}.jpeg?auto=compress&cs=tinysrgb&dpr=1&w=500"
+            ));
+        }
+        if title.trim().eq_ignore_ascii_case("download") || title.trim().is_empty() {
+            *title = format!("Pexels video {video_id}");
+        }
+        if source.id == "pexels-videos" {
+            return;
+        }
+    }
+}
+
+fn pexels_video_id(media_url: &str) -> Option<&str> {
+    if let Some((_, rest)) = media_url.split_once("/download/video/") {
+        return rest.split('/').find(|segment| !segment.trim().is_empty());
+    }
+    if let Some((_, rest)) = media_url.split_once("/video-files/") {
+        return rest.split('/').find(|segment| !segment.trim().is_empty());
+    }
+    None
+}
+
+fn render_profile_template(
+    template: &str,
+    media_url: &str,
+    title: Option<&str>,
+    thumbnail_url: Option<&str>,
+    source_page_url: &str,
+) -> String {
+    let media_path = Url::parse(media_url)
+        .ok()
+        .map(|url| url.path().to_string())
+        .unwrap_or_default();
+    let basename = media_path
+        .rsplit('/')
+        .find(|segment| !segment.trim().is_empty())
+        .unwrap_or("");
+    let basename_stem = basename
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(basename);
+    let media_id = media_url_path_id(media_url).unwrap_or_default();
+
+    template
+        .replace("{media_url}", media_url)
+        .replace("{source_page_url}", source_page_url)
+        .replace("{title}", title.unwrap_or(""))
+        .replace("{thumbnail_url}", thumbnail_url.unwrap_or(""))
+        .replace("{media_id}", &media_id)
+        .replace("{basename}", basename)
+        .replace("{basename_stem}", basename_stem)
+        .replace("{media_path}", &media_path)
+}
+
+fn media_url_path_id(media_url: &str) -> Option<String> {
+    let path = Url::parse(media_url).ok()?.path().to_string();
+    path.split('/')
+        .find(|segment| !segment.trim().is_empty() && segment.chars().all(|ch| ch.is_ascii_digit()))
+        .map(|segment| segment.to_string())
 }
 
 fn profile_title(

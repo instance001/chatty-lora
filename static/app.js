@@ -8,6 +8,7 @@ const state = {
     selectedDatasetSlug: "",
     selectedTrainingBackendId: "",
     backendSelectionManuallyOverridden: false,
+    lastAppliedLaneDefaults: null,
     lastSeededProjectName: "",
     loadedProjectSlug: "",
     loadedProjectName: "",
@@ -356,6 +357,7 @@ elements.datasetSelect.addEventListener("change", () => {
 elements.trainingBackendSelect.addEventListener("change", () => {
   state.builder.selectedTrainingBackendId = elements.trainingBackendSelect.value;
   state.builder.backendSelectionManuallyOverridden = true;
+  applyRecommendedLaneDefaults(getSelectedTrainingBackend());
   renderBuilder();
 });
 
@@ -368,6 +370,7 @@ elements.baseModelSelect.addEventListener("change", () => {
     if (suggestedBackend && baseModelOption) {
       elements.prepareProjectNote.textContent = `Switched the backend to ${suggestedBackend.name} because it matches the ${baseModelOption.family_label} family better.`;
       state.builder.backendSelectionManuallyOverridden = false;
+      applyRecommendedLaneDefaults(suggestedBackend);
     }
   }
   renderBuilder();
@@ -1267,6 +1270,12 @@ function renderPreviewMedia(item) {
   if (item.kind === "Image" && item.thumb_url) {
     return `<img src="${escapeAttribute(item.thumb_url)}" alt="${escapeAttribute(item.title)}" loading="lazy" />`;
   }
+  if (item.kind === "Video" && item.preview_url) {
+    const posterAttribute = item.thumb_url
+      ? ` poster="${escapeAttribute(item.thumb_url)}"`
+      : "";
+    return `<video controls preload="metadata" playsinline muted${posterAttribute} src="${escapeAttribute(item.preview_url)}"></video>`;
+  }
   if (item.kind === "Audio" && item.preview_url) {
     return `<audio controls preload="none" src="${escapeAttribute(item.preview_url)}"></audio>`;
   }
@@ -1423,16 +1432,47 @@ function rankedTrainingBackends(backends) {
   return [...(Array.isArray(backends) ? backends : [])].sort((left, right) => {
     const leftCompatibility = backendFamilyCompatibility(left, baseModelOption);
     const rightCompatibility = backendFamilyCompatibility(right, baseModelOption);
+    const leftVariantScore = backendVariantCompatibilityScore(left, baseModelOption);
+    const rightVariantScore = backendVariantCompatibilityScore(right, baseModelOption);
     const leftScore = leftCompatibility.compatible === true ? 0 : leftCompatibility.compatible === null ? 1 : 2;
     const rightScore = rightCompatibility.compatible === true ? 0 : rightCompatibility.compatible === null ? 1 : 2;
     if (leftScore !== rightScore) {
       return leftScore - rightScore;
+    }
+    if (leftVariantScore !== rightVariantScore) {
+      return leftVariantScore - rightVariantScore;
     }
     if (left.ready !== right.ready) {
       return left.ready ? -1 : 1;
     }
     return left.name.localeCompare(right.name);
   });
+}
+
+function baseModelVariantHint(baseModelOption) {
+  const haystack = `${baseModelOption?.label || ""} ${baseModelOption?.value || ""}`.toLowerCase();
+  if (haystack.includes("14b")) {
+    return "14b";
+  }
+  if (haystack.includes("1.3b")) {
+    return "1.3b";
+  }
+  return null;
+}
+
+function backendVariantCompatibilityScore(backend, baseModelOption) {
+  const variantHint = baseModelVariantHint(baseModelOption);
+  if (!backend || !variantHint) {
+    return 1;
+  }
+  const backendHaystack = `${backend.name || ""} ${backend.lane_task || ""} ${backend.lane_label || ""}`.toLowerCase();
+  if (variantHint === "14b") {
+    return backendHaystack.includes("14b") ? 0 : 2;
+  }
+  if (variantHint === "1.3b") {
+    return backendHaystack.includes("1.3b") ? 0 : backendHaystack.includes("14b") ? 2 : 1;
+  }
+  return 1;
 }
 
 function backendFamilyCompatibility(backend, baseModelOption) {
@@ -1465,7 +1505,15 @@ function trainingBackendSuggestionReason(backend, baseModelOption) {
   }
 
   const compatibility = backendFamilyCompatibility(backend, baseModelOption);
+  const variantHint = baseModelVariantHint(baseModelOption);
+  const variantScore = backendVariantCompatibilityScore(backend, baseModelOption);
   if (compatibility.compatible === true) {
+    if (variantHint && variantScore === 0 && backend.ready) {
+      return `${backend.name} is being suggested because it matches the ${baseModelOption.family_label} family and the ${variantHint.toUpperCase()} model variant you selected, and it looks locally ready.`;
+    }
+    if (variantHint && variantScore === 0) {
+      return `${backend.name} is being suggested because it matches the ${baseModelOption.family_label} family and the ${variantHint.toUpperCase()} model variant you selected, even though the local runtime still needs setup.`;
+    }
     if (backend.ready) {
       return `${backend.name} is being suggested because it matches the ${baseModelOption.family_label} family and looks locally ready.`;
     }
@@ -1709,6 +1757,33 @@ function currentTrainingSettings() {
     learningRate: toMaybeFloat(elements.learningRateInput.value) || 0.0001,
     validationSplit: clampNumber(toMaybeNumber(elements.validationSplitInput.value) || 0, 0, 100),
   };
+}
+
+function isBuilderFormDirty() {
+  if (!state.builder.loadedSnapshot) {
+    return false;
+  }
+
+  return stableStringify(getBuilderFormSnapshot()) !== stableStringify(state.builder.loadedSnapshot);
+}
+
+function stableStringify(value) {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+function sortJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortJsonValue(entry));
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((accumulator, key) => {
+        accumulator[key] = sortJsonValue(value[key]);
+        return accumulator;
+      }, {});
+  }
+  return value;
 }
 
 function getBuilderFormSnapshot() {
@@ -2061,7 +2136,60 @@ function seedBuilderForm() {
 
   state.builder.backendSelectionManuallyOverridden = false;
   populateTrainingBackendSelect();
+  applyRecommendedLaneDefaults(getSelectedTrainingBackend());
 
+}
+
+function shouldAutoApplyLaneDefaults(defaults) {
+  if (!defaults) {
+    return false;
+  }
+  if (state.builder.loadedSnapshot || state.builder.draftMode === "copy") {
+    return false;
+  }
+
+  const settings = currentTrainingSettings();
+  const last = state.builder.lastAppliedLaneDefaults;
+  if (last) {
+    return settings.rank === Number(last.rank || 0)
+      && settings.resolution === Number(last.resolution || 0)
+      && settings.batchSize === Number(last.batch_size || 0)
+      && settings.epochs === Number(last.epochs || 0)
+      && nearlyEqual(settings.learningRate, Number(last.learning_rate || 0));
+  }
+
+  return settings.rank === 8
+    && settings.resolution === 512
+    && settings.batchSize === 1
+    && settings.epochs === 1
+    && nearlyEqual(settings.learningRate, 0.0001);
+}
+
+function applyRecommendedLaneDefaults(backend, { force = false } = {}) {
+  const defaults = backend?.recommended_defaults;
+  if (!defaults) {
+    return;
+  }
+  if (!force && !shouldAutoApplyLaneDefaults(defaults)) {
+    return;
+  }
+
+  elements.rankInput.value = String(defaults.rank || 8);
+  elements.resolutionSelect.value = String(defaults.resolution || 512);
+  elements.batchSizeInput.value = String(defaults.batch_size || 1);
+  elements.epochsInput.value = String(defaults.epochs || 1);
+  elements.learningRateInput.value = String(defaults.learning_rate || 0.0001);
+  state.builder.lastAppliedLaneDefaults = {
+    rank: Number(defaults.rank || 8),
+    resolution: Number(defaults.resolution || 512),
+    batch_size: Number(defaults.batch_size || 1),
+    epochs: Number(defaults.epochs || 1),
+    learning_rate: Number(defaults.learning_rate || 0.0001),
+  };
+}
+
+function nearlyEqual(left, right) {
+  return Math.abs(Number(left || 0) - Number(right || 0)) < 1e-9;
 }
 
 function suggestedTrainingBackend(backends, requestedId, { preserveCompatibleSelection = true } = {}) {
@@ -2889,54 +3017,72 @@ function renderWanTrainingStatus(status, selectedDataset, selectedBackend) {
     return;
   }
 
-  const defaults = status.recommended_defaults || {};
+  const laneDefaults = selectedBackend?.recommended_defaults || status.recommended_defaults || {};
+  const laneTask = selectedBackend?.lane_task || "t2v-1.3B";
+  const laneLabel = selectedBackend?.lane_label || "Wan lane";
+  const laneBundleReady = typeof selectedBackend?.model_bundle_ready === "boolean"
+    ? selectedBackend.model_bundle_ready
+    : status.model_bundle_ready;
+  const laneReady = typeof selectedBackend?.ready === "boolean" ? selectedBackend.ready : status.ready;
+  const laneNotes = Array.isArray(selectedBackend?.notes) && selectedBackend.notes.length
+    ? selectedBackend.notes
+    : status.notes;
+  const laneDit = selectedBackend?.selected_dit_relative_path || status.selected_dit_relative_path;
   const mediaKind = trainingBackendMediaKind(selectedBackend);
   const selectedDatasetNote = selectedDataset
-    ? mediaKind === "image"
-      ? selectedDataset.images > 0
-        ? `Selected dataset has ${selectedDataset.images} image file${selectedDataset.images === 1 ? "" : "s"} ready for the Wan image visual lane.`
+      ? mediaKind === "image"
+        ? selectedDataset.images > 0
+          ? `Selected dataset has ${selectedDataset.images} image file${selectedDataset.images === 1 ? "" : "s"} ready for the Wan image visual lane.`
         : "Selected dataset has no images yet. The selected Wan image lane needs still images before training."
       : selectedDataset.video > 0
-        ? `Selected dataset has ${selectedDataset.video} video file${selectedDataset.video === 1 ? "" : "s"} ready for this first Wan video lane.`
+        ? `Selected dataset has ${selectedDataset.video} video file${selectedDataset.video === 1 ? "" : "s"} ready for the selected Wan video lane.`
         : "Selected dataset has no videos yet. The selected Wan video lane is video-first, so curate or add videos before training."
     : "Pick a curated dataset to see whether it matches this Wan lane.";
 
   elements.wanTrainingStatus.innerHTML = `
     <div class="preflight-summary">
-      <article class="summary-card ${status.model_bundle_ready ? "ready-card" : ""}">
+      <article class="summary-card ${laneBundleReady ? "ready-card" : ""}">
         <p class="summary-title">Model bundle</p>
-        <strong>${status.model_bundle_ready ? "Ready" : "Missing parts"}</strong>
-        <span>DiT + T5 + VAE for Wan 2.1 T2V 1.3B</span>
+        <strong>${laneBundleReady ? "Ready" : "Missing parts"}</strong>
+        <span>${escapeHtml(`Training weights from models/wan/dependencies/: DiT + T5 + VAE for ${laneTask}`)}</span>
       </article>
       <article class="summary-card ${status.trainer_ready ? "ready-card" : ""}">
         <p class="summary-title">Musubi trainer</p>
         <strong>${status.trainer_ready ? "Ready" : "Not ready"}</strong>
         <span>${escapeHtml(status.wsl_distro)} | ${escapeHtml(status.wsl_musubi_root)}</span>
       </article>
-      <article class="summary-card ${status.ready ? "ready-card" : ""}">
+      <article class="summary-card ${laneReady ? "ready-card" : ""}">
         <p class="summary-title">End to end</p>
-        <strong>${status.ready ? "Ready to prepare" : "Preflight blocked"}</strong>
+        <strong>${laneReady ? "Ready to prepare" : "Preflight blocked"}</strong>
         <span>${escapeHtml(selectedDatasetNote)}</span>
       </article>
     </div>
 
     <div class="wan-default-strip">
-      <span class="list-badge">Resolution ${escapeHtml(String(defaults.resolution || 768))}px</span>
-      <span class="list-badge">${escapeHtml(String(defaults.target_frames || 17))} frames</span>
-      <span class="list-badge">${escapeHtml(String(defaults.source_fps || 16))} FPS source target</span>
-      <span class="list-badge">Batch ${escapeHtml(String(defaults.batch_size || 1))}</span>
-      <span class="list-badge">Rank ${escapeHtml(String(defaults.rank || 32))}</span>
+      <span class="list-badge">${escapeHtml(laneLabel)}</span>
+      <span class="list-badge">Resolution ${escapeHtml(String(laneDefaults.resolution || 768))}px</span>
+      ${mediaKind === "video" ? `<span class="list-badge">${escapeHtml(String(laneDefaults.target_frames || 17))} frames</span>` : ""}
+      ${mediaKind === "video" ? `<span class="list-badge">${escapeHtml(String(laneDefaults.source_fps || 16))} FPS source target</span>` : ""}
+      <span class="list-badge">Batch ${escapeHtml(String(laneDefaults.batch_size || 1))}</span>
+      <span class="list-badge">Rank ${escapeHtml(String(laneDefaults.rank || 32))}</span>
+      <span class="list-badge">Swap ${escapeHtml(String(laneDefaults.blocks_to_swap || 20))} blocks</span>
+      ${laneDit ? `<span class="list-badge">${escapeHtml(laneDit.split(/[\\/]/).pop() || laneDit)}</span>` : ""}
     </div>
 
     <div class="wan-memory-note">
       <div>
         <p class="summary-title">Low-VRAM route</p>
-        <strong>Designed for cautious 8GB AMD tests</strong>
+        <strong>${escapeHtml(laneDefaults.route_label || (laneTask === "t2v-14B" ? "Exploratory larger-model route" : "Designed for cautious 8GB AMD tests"))}</strong>
       </div>
       <ul class="bullet-list compact-bullets">
         <li>Latent and text cache scripts run their heavy encoder work on CPU to avoid early ROCm memory failures.</li>
-        <li>Training still uses the Radeon GPU, but enables split attention, FP8-scaled Wan weights, input offload, and swaps 20 of 30 Wan blocks through CPU memory.</li>
-        <li>This is slower than a big-VRAM setup, but it proved the 512px, 17-frame, rank 8 Wan video smoke test end to end.</li>
+        <li>${escapeHtml(laneTask === "t2v-14B"
+          ? `Training still uses the Radeon GPU, but the current 14B route now loads BF16 DiT weights, enables split attention, uses input offload, and swaps ${laneDefaults.blocks_to_swap || 20} of 40 Wan blocks through CPU memory.`
+          : `Training still uses the Radeon GPU, but enables split attention, FP8-base Wan weights, input offload, and swaps ${laneDefaults.blocks_to_swap || 20} of 30 Wan blocks through CPU memory.`)}</li>
+        <li>${escapeHtml(laneDefaults.route_summary || (laneTask === "t2v-14B"
+          ? "This 14B lane is much heavier than the proven 1.3B smoke-test path. Treat it as an intentional stronger-hardware experiment, not the default consumer-GPU starter route."
+          : "This is slower than a big-VRAM setup, but it proved the 512px, 17-frame, rank 8 Wan video smoke test end to end."))}</li>
+        <li>${escapeHtml(laneDefaults.hardware_note || "Check hardware pressure before scaling the run up.")}</li>
       </ul>
     </div>
 
@@ -2957,7 +3103,7 @@ function renderWanTrainingStatus(status, selectedDataset, selectedBackend) {
     </div>
 
     <ul class="bullet-list compact-bullets">
-      ${status.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}
+      ${laneNotes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}
     </ul>
   `;
 }
@@ -3142,6 +3288,7 @@ function applyProjectToBuilderForm(project) {
   state.builder.selectedDatasetSlug = project.dataset_slug || "";
   state.builder.selectedTrainingBackendId = project.training_backend_id || "";
   state.builder.backendSelectionManuallyOverridden = Boolean(project.backend_selection_manually_overridden);
+  state.builder.lastAppliedLaneDefaults = null;
   state.builder.conceptBlocks = conceptBlocks;
   elements.projectNameInput.value = project.project_name || "";
   elements.datasetSelect.value = project.dataset_slug || "";

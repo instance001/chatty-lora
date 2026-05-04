@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chatty-lora</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260503-2" />
   </head>
   <body>
     <div class="shell">
@@ -503,7 +503,7 @@
               <div class="builder-settings-grid">
                 <label class="field-block compact">
                   <span class="field-title">Rank</span>
-                  <input id="rankInput" type="number" min="4" max="256" step="4" value="8" />
+                  <input id="rankInput" type="number" min="2" max="256" step="1" value="8" />
                   <span class="field-help" id="rankHelp"></span>
                 </label>
                 <label class="field-block compact">
@@ -519,6 +519,8 @@
                 <label class="field-block compact">
                   <span class="field-title">Training resolution</span>
                   <select id="resolutionSelect">
+                    <option>320</option>
+                    <option>384</option>
                     <option selected>512</option>
                     <option>768</option>
                     <option>1024</option>
@@ -549,9 +551,10 @@
               <div class="note-panel">
                 <h3>Low-VRAM first pass</h3>
                 <p>
-                  The visible defaults match the first proven Wan smoke test:
-                  512px, 17 frames, rank 8, batch 1, one epoch. Raise these only
-                  after the tiny run works on your hardware.
+                  The visible defaults follow the selected lane's starter route.
+                  The proven 1.3B lane begins at 512px, 17 frames, and rank 8.
+                  The experimental 14B lane intentionally squeezes much lower and
+                  may still run out of WSL RAM plus swap before it finishes.
                 </p>
               </div>
 
@@ -657,7 +660,7 @@
       </main>
     </div>
 
-    <script src="/static/concept-stack.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/concept-stack.js?v=20260503-1"></script>
+    <script src="/static/app.js?v=20260503-2"></script>
   </body>
 </html>

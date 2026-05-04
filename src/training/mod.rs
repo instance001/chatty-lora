@@ -38,6 +38,20 @@ const WAN_FILES: &[WanFileDefinition] = &[
         required: false,
     },
     WanFileDefinition {
+        primary_relative_path: "models/wan/dependencies/dit/wan2.1_t2v_14B_bf16.safetensors",
+        legacy_relative_paths: &[],
+        label: "Wan 2.1 T2V 14B DiT BF16",
+        role: "Diffusion model",
+        required: true,
+    },
+    WanFileDefinition {
+        primary_relative_path: "models/wan/dependencies/dit/wan2.1_t2v_14B_fp16.safetensors",
+        legacy_relative_paths: &[],
+        label: "Wan 2.1 T2V 14B DiT FP16 fallback",
+        role: "Diffusion model fallback",
+        required: false,
+    },
+    WanFileDefinition {
         primary_relative_path: "models/wan/dependencies/t5/models_t5_umt5-xxl-enc-bf16.pth",
         legacy_relative_paths: &["models/wan21_t2v_1_3b/t5/models_t5_umt5-xxl-enc-bf16.pth"],
         label: "UMT5 XXL text encoder BF16",
@@ -74,6 +88,7 @@ pub fn scan_backends_with_wan_status(
     let mut backends = vec![
         musubi_wan_video_backend(wan_status.clone()),
         musubi_wan_image_backend(wan_status),
+        musubi_wan_14b_backend(scan_wan_training(paths)),
     ];
     backends.extend(
         backend_registry::BACKENDS
@@ -99,6 +114,15 @@ pub fn is_known_backend(id: &str) -> bool {
 pub fn is_musubi_wan_backend(id: &str) -> bool {
     id == backend_registry::MUSUBI_WAN_BACKEND_ID
         || id == backend_registry::MUSUBI_WAN_IMAGE_BACKEND_ID
+        || id == backend_registry::MUSUBI_WAN_14B_BACKEND_ID
+}
+
+#[derive(Clone)]
+struct WanLaneBundleStatus {
+    model_bundle_ready: bool,
+    selected_dit_relative_path: Option<String>,
+    recommended_defaults: WanTrainingDefaults,
+    notes: Vec<String>,
 }
 
 pub fn backend_label(id: &str) -> String {
@@ -115,7 +139,8 @@ pub fn scan_wan_training(paths: &ProjectPaths) -> WanTrainingStatus {
         .map(|definition| wan_file_status(paths, *definition))
         .collect::<Vec<_>>();
 
-    let selected_dit_relative_path = select_dit_path(&files);
+    let selected_dit_relative_path =
+        select_dit_path_for_task(&files, lane_registry::TRAINING_LANES[0].task);
     let t5_ready = files
         .iter()
         .any(|file| file.relative_path.contains("/t5/") || file.relative_path.contains("\\t5\\"));
@@ -142,7 +167,7 @@ pub fn scan_wan_training(paths: &ProjectPaths) -> WanTrainingStatus {
     let mut notes = Vec::new();
     if model_bundle_ready {
         notes.push(
-            "Wan 2.1 T2V 1.3B model bundle is present enough for the current Wan/Musubi lanes."
+            "At least one Wan model bundle is present enough for the current Wan/Musubi lanes."
                 .to_string(),
         );
     } else {
@@ -158,16 +183,20 @@ pub fn scan_wan_training(paths: &ProjectPaths) -> WanTrainingStatus {
     }
 
     notes.push(format!(
-        "Place Wan GGUF experiments under {}/ and Musubi dependency files under {}/.",
+        "Place Wan GGUF inference experiments under {}/ and Musubi training dependency files under {}/.",
         model_registry::family_gguf_relative_root(model_registry::WAN_FAMILY_ID)
             .unwrap_or("models/wan/gguf"),
         model_registry::family_dependency_relative_root(model_registry::WAN_FAMILY_ID)
             .unwrap_or("models/wan/dependencies")
     ));
+    notes.push(
+        "For the current Wan 1.3B and 14B training lanes, GGUF files do not satisfy the model-bundle requirement. Training looks for a task-matched DiT plus the shared T5 encoder and Wan VAE in models/wan/dependencies/."
+            .to_string(),
+    );
 
     if let Some(selected_dit) = &selected_dit_relative_path {
         notes.push(format!(
-            "Selected DiT for generated plans: {}.",
+            "Selected default Wan DiT for generated plans: {}.",
             selected_dit
         ));
     }
@@ -205,18 +234,23 @@ pub fn scan_wan_training(paths: &ProjectPaths) -> WanTrainingStatus {
             rank: default_lane.defaults.rank,
             epochs: default_lane.defaults.epochs,
             learning_rate: default_lane.defaults.learning_rate,
+            blocks_to_swap: default_lane.defaults.blocks_to_swap,
+            route_label: default_lane.defaults.route_label.to_string(),
+            route_summary: default_lane.defaults.route_summary.to_string(),
+            hardware_note: default_lane.defaults.hardware_note.to_string(),
+            exploratory: default_lane.defaults.exploratory,
         },
         files,
         notes,
     }
 }
 
-pub fn selected_wan_paths(paths: &ProjectPaths) -> Option<WanPathSet> {
-    let status = scan_wan_training(paths);
+pub fn selected_wan_paths(paths: &ProjectPaths, backend_id: &str) -> Option<WanPathSet> {
+    let lane_status = resolve_wan_lane_bundle(paths, backend_id)?;
     let t5 = resolved_wan_file_path(paths, "Text encoder")?;
     let vae = resolved_wan_file_path(paths, "VAE")?;
     Some(WanPathSet {
-        dit: paths.root.join(status.selected_dit_relative_path?),
+        dit: paths.root.join(lane_status.selected_dit_relative_path?),
         t5,
         vae,
     })
@@ -234,6 +268,12 @@ fn musubi_wan_video_backend(status: WanTrainingStatus) -> TrainingBackendSummary
         .expect("musubi wan backend definition should exist");
     let lane = lane_registry::lane_definition(definition.id)
         .expect("musubi wan lane definition should exist");
+    let lane_bundle = resolve_wan_lane_bundle_from_files(&status.files, definition.id);
+    let mut notes = lane_bundle
+        .as_ref()
+        .map(|bundle| bundle.notes.clone())
+        .unwrap_or_default();
+    notes.extend(status.notes.clone());
     TrainingBackendSummary {
         id: definition.id.to_string(),
         name: definition.name.to_string(),
@@ -244,9 +284,20 @@ fn musubi_wan_video_backend(status: WanTrainingStatus) -> TrainingBackendSummary
         lane_task: Some(lane.task.to_string()),
         compatible_family_ids: vec![model_registry::WAN_FAMILY_ID.to_string()],
         compatible_family_labels: backend_registry::compatible_family_labels(definition),
-        ready: status.ready,
+        model_bundle_ready: lane_bundle.as_ref().map(|bundle| bundle.model_bundle_ready),
+        selected_dit_relative_path: lane_bundle
+            .as_ref()
+            .and_then(|bundle| bundle.selected_dit_relative_path.clone()),
+        recommended_defaults: lane_bundle
+            .as_ref()
+            .map(|bundle| bundle.recommended_defaults.clone()),
+        ready: lane_bundle
+            .as_ref()
+            .map(|bundle| bundle.model_bundle_ready)
+            .unwrap_or(false)
+            && status.trainer_ready,
         relative_path: Some(format!("{}: {}", status.wsl_distro, status.wsl_musubi_root)),
-        notes: status.notes,
+        notes,
     }
 }
 
@@ -256,6 +307,12 @@ fn musubi_wan_image_backend(status: WanTrainingStatus) -> TrainingBackendSummary
             .expect("musubi wan image backend definition should exist");
     let lane = lane_registry::lane_definition(definition.id)
         .expect("musubi wan image lane definition should exist");
+    let lane_bundle = resolve_wan_lane_bundle_from_files(&status.files, definition.id);
+    let mut notes = lane_bundle
+        .as_ref()
+        .map(|bundle| bundle.notes.clone())
+        .unwrap_or_default();
+    notes.extend(status.notes.clone());
     TrainingBackendSummary {
         id: definition.id.to_string(),
         name: definition.name.to_string(),
@@ -266,9 +323,71 @@ fn musubi_wan_image_backend(status: WanTrainingStatus) -> TrainingBackendSummary
         lane_task: Some(lane.task.to_string()),
         compatible_family_ids: vec![model_registry::WAN_FAMILY_ID.to_string()],
         compatible_family_labels: backend_registry::compatible_family_labels(definition),
-        ready: status.ready,
+        model_bundle_ready: lane_bundle.as_ref().map(|bundle| bundle.model_bundle_ready),
+        selected_dit_relative_path: lane_bundle
+            .as_ref()
+            .and_then(|bundle| bundle.selected_dit_relative_path.clone()),
+        recommended_defaults: lane_bundle
+            .as_ref()
+            .map(|bundle| bundle.recommended_defaults.clone()),
+        ready: lane_bundle
+            .as_ref()
+            .map(|bundle| bundle.model_bundle_ready)
+            .unwrap_or(false)
+            && status.trainer_ready,
         relative_path: Some(format!("{}: {}", status.wsl_distro, status.wsl_musubi_root)),
-        notes: status.notes,
+        notes,
+    }
+}
+
+fn musubi_wan_14b_backend(status: WanTrainingStatus) -> TrainingBackendSummary {
+    let definition =
+        backend_registry::backend_definition(backend_registry::MUSUBI_WAN_14B_BACKEND_ID)
+            .expect("musubi wan 14b backend definition should exist");
+    let lane =
+        lane_registry::lane_definition(definition.id).expect("musubi wan 14b lane should exist");
+    let lane_bundle = resolve_wan_lane_bundle_from_files(&status.files, definition.id);
+    let mut notes = lane_bundle
+        .as_ref()
+        .map(|bundle| bundle.notes.clone())
+        .unwrap_or_default();
+    notes.push(
+        "Wan 14B is bolted in as an exploratory lane. Expect materially higher VRAM and system-memory pressure than the proven 1.3B route."
+            .to_string(),
+    );
+    notes.push(
+        "On the current WSL + ROCm route, Wan 14B can be Linux-OOM-killed on CPU-side RAM/swap pressure before Windows Task Manager shows obvious GPU load. Treat WSL memory and swap as first-class requirements, not just VRAM."
+            .to_string(),
+    );
+    notes.push(
+        "The current experimental 14B handoff now avoids the FP8 weight-cast path on this chassis because the BF16-loaded route was the only local variant that reached live training before system memory became the next limit."
+            .to_string(),
+    );
+    notes.extend(status.notes.clone());
+    TrainingBackendSummary {
+        id: definition.id.to_string(),
+        name: definition.name.to_string(),
+        description: definition.description.to_string(),
+        best_for: definition.best_for.to_string(),
+        lane_label: Some(lane.label.to_string()),
+        lane_dataset_kind: Some(lane.dataset_kind.media_label().to_string()),
+        lane_task: Some(lane.task.to_string()),
+        compatible_family_ids: vec![model_registry::WAN_FAMILY_ID.to_string()],
+        compatible_family_labels: backend_registry::compatible_family_labels(definition),
+        model_bundle_ready: lane_bundle.as_ref().map(|bundle| bundle.model_bundle_ready),
+        selected_dit_relative_path: lane_bundle
+            .as_ref()
+            .and_then(|bundle| bundle.selected_dit_relative_path.clone()),
+        recommended_defaults: lane_bundle
+            .as_ref()
+            .map(|bundle| bundle.recommended_defaults.clone()),
+        ready: lane_bundle
+            .as_ref()
+            .map(|bundle| bundle.model_bundle_ready)
+            .unwrap_or(false)
+            && status.trainer_ready,
+        relative_path: Some(format!("{}: {}", status.wsl_distro, status.wsl_musubi_root)),
+        notes,
     }
 }
 
@@ -289,16 +408,91 @@ fn wan_file_status(paths: &ProjectPaths, definition: WanFileDefinition) -> WanMo
     }
 }
 
-fn select_dit_path(files: &[WanModelFileStatus]) -> Option<String> {
+fn select_dit_path_for_task(files: &[WanModelFileStatus], task: &str) -> Option<String> {
+    let target_label = match task {
+        "t2v-14B" => "14B",
+        _ => "1.3B",
+    };
     files
         .iter()
+        .filter(|file| file.label.contains(target_label))
         .find(|file| file.relative_path.contains("bf16") && file.present)
         .or_else(|| {
             files
                 .iter()
+                .filter(|file| file.label.contains(target_label))
                 .find(|file| file.relative_path.contains("fp16") && file.present)
         })
         .map(|file| file.relative_path.clone())
+}
+
+pub fn wan_bundle_ready_for_backend(paths: &ProjectPaths, backend_id: &str) -> bool {
+    resolve_wan_lane_bundle(paths, backend_id)
+        .map(|bundle| bundle.model_bundle_ready)
+        .unwrap_or(false)
+}
+
+fn resolve_wan_lane_bundle(paths: &ProjectPaths, backend_id: &str) -> Option<WanLaneBundleStatus> {
+    let files = WAN_FILES
+        .iter()
+        .map(|definition| wan_file_status(paths, *definition))
+        .collect::<Vec<_>>();
+    resolve_wan_lane_bundle_from_files(&files, backend_id)
+}
+
+fn resolve_wan_lane_bundle_from_files(
+    files: &[WanModelFileStatus],
+    backend_id: &str,
+) -> Option<WanLaneBundleStatus> {
+    let lane = lane_registry::lane_definition(backend_id)?;
+    let selected_dit_relative_path = select_dit_path_for_task(files, lane.task);
+    let t5_ready = files
+        .iter()
+        .find(|file| file.role == "Text encoder")
+        .map(|file| file.present)
+        .unwrap_or(false);
+    let vae_ready = files
+        .iter()
+        .find(|file| file.role == "VAE")
+        .map(|file| file.present)
+        .unwrap_or(false);
+    let model_bundle_ready = selected_dit_relative_path.is_some() && t5_ready && vae_ready;
+    let variant_label = match lane.task {
+        "t2v-14B" => "Wan 2.1 T2V 14B",
+        _ => "Wan 2.1 T2V 1.3B",
+    };
+    let mut notes = Vec::new();
+    if model_bundle_ready {
+        notes.push(format!(
+            "{variant_label} model bundle is present enough for this lane."
+        ));
+    } else {
+        notes.push(format!(
+            "{variant_label} bundle is incomplete. This lane needs a matching DiT plus the shared T5 encoder and Wan VAE."
+        ));
+    }
+    if let Some(selected_dit) = &selected_dit_relative_path {
+        notes.push(format!("Selected DiT for this lane: {selected_dit}."));
+    }
+    Some(WanLaneBundleStatus {
+        model_bundle_ready,
+        selected_dit_relative_path,
+        recommended_defaults: WanTrainingDefaults {
+            resolution: lane.defaults.resolution,
+            target_frames: lane.defaults.target_frames.unwrap_or(17),
+            source_fps: lane.defaults.source_fps.unwrap_or(16.0),
+            batch_size: lane.defaults.batch_size,
+            rank: lane.defaults.rank,
+            epochs: lane.defaults.epochs,
+            learning_rate: lane.defaults.learning_rate,
+            blocks_to_swap: lane.defaults.blocks_to_swap,
+            route_label: lane.defaults.route_label.to_string(),
+            route_summary: lane.defaults.route_summary.to_string(),
+            hardware_note: lane.defaults.hardware_note.to_string(),
+            exploratory: lane.defaults.exploratory,
+        },
+        notes,
+    })
 }
 
 fn resolve_existing_wan_relative_path(
@@ -392,6 +586,9 @@ fn build_summary(
             .map(|family_id| family_id.to_string())
             .collect(),
         compatible_family_labels,
+        model_bundle_ready: None,
+        selected_dit_relative_path: None,
+        recommended_defaults: None,
         ready,
         relative_path,
         notes,
