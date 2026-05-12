@@ -2,6 +2,7 @@ pub const WAN_FAMILY_ID: &str = "wan";
 pub const FLUX_FAMILY_ID: &str = "flux";
 pub const AI_ASSISTANT_FAMILY_ID: &str = "ai_assistant";
 pub const AUDIO_FAMILY_ID: &str = "audio";
+pub const WAN_DIFFUSERS_RELATIVE_ROOT: &str = "models/wan/diffusers";
 
 #[derive(Debug, Clone, Copy)]
 pub struct ModelFamilyDefinition {
@@ -68,6 +69,13 @@ pub fn family_gguf_relative_root(family_id: &str) -> Option<&'static str> {
 
 pub fn family_dependency_relative_root(family_id: &str) -> Option<&'static str> {
     family_definition(family_id).map(|family| family.dependency_relative_root)
+}
+
+pub fn family_diffusers_relative_root(family_id: &str) -> Option<&'static str> {
+    match family_id {
+        WAN_FAMILY_ID => Some(WAN_DIFFUSERS_RELATIVE_ROOT),
+        _ => None,
+    }
 }
 
 pub fn family_legacy_relative_roots(family_id: &str) -> &'static [&'static str] {

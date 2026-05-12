@@ -1,0 +1,6 @@
+{
+  "module_id": "chatty_lora",
+  "display_name": "Chatty-lora",
+  "icon": "layers",
+  "description": "Local LoRA builder dashboard for respectful material search, dataset curation, training-plan preparation, and source-fix review."
+}

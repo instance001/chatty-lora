@@ -181,6 +181,34 @@ pub fn prepare_project(
                 if media_count == 1 { "" } else { "s" }
             ));
         }
+    } else if training::is_ai_toolkit_wan22_5b_backend(&spec.training_backend_id) {
+        let (generated_path, media_count, media_label) =
+            generate_ai_toolkit_wan22_ti2v_5b_handoff(paths, &dataset_path, &mut spec)?;
+        notes.push(format!(
+            "Generated AI Toolkit Wan 2.2 TI2V 5B scaffold at {}.",
+            generated_path
+        ));
+        if media_count == 0 {
+            notes.push(format!(
+                "Warning: this dataset currently has no {} files, so the staged AI Toolkit dataset folder is empty until material is added.",
+                media_label
+            ));
+        } else {
+            notes.push(format!(
+                "Staged {} {}{} into the AI Toolkit dataset folder with matching caption files.",
+                media_count,
+                media_label,
+                if media_count == 1 { "" } else { "s" }
+            ));
+        }
+        notes.push(
+            if media_label == "image" {
+                "This first Wan 2.2 TI2V 5B image lane is scaffolded for refinement. Chatty-lora can now prepare the staged dataset folder and AI Toolkit job files, and the in-browser runner can launch the generated PowerShell scaffold."
+            } else {
+                "This first Wan 2.2 TI2V 5B video lane is scaffolded for refinement. Chatty-lora can now prepare the staged dataset folder and AI Toolkit job files, and the in-browser runner can launch the generated PowerShell scaffold."
+            }
+            .to_string(),
+        );
     }
 
     let json = serde_json::to_string_pretty(&spec).context("could not serialize project spec")?;
@@ -527,6 +555,9 @@ fn build_project_handoff_summary(
     paths: &ProjectPaths,
     spec: &ProjectSpec,
 ) -> ProjectHandoffSummary {
+    if training::is_ai_toolkit_wan22_5b_backend(&spec.training_backend_id) {
+        return build_ai_toolkit_handoff_summary(paths, spec);
+    }
     if !training::is_musubi_wan_backend(&spec.training_backend_id) {
         return ProjectHandoffSummary::default();
     }
@@ -656,6 +687,116 @@ fn build_project_handoff_summary(
         commands,
         video_rows: dataset_kind.is_video().then_some(row_count).flatten(),
         image_rows: dataset_kind.is_image().then_some(row_count).flatten(),
+    }
+}
+
+fn build_ai_toolkit_handoff_summary(
+    paths: &ProjectPaths,
+    spec: &ProjectSpec,
+) -> ProjectHandoffSummary {
+    let Some(relative_path) = spec.generated_training_path.as_deref() else {
+        return ProjectHandoffSummary {
+            notes: vec![
+                "No generated AI Toolkit handoff folder is attached to this saved plan yet."
+                    .to_string(),
+            ],
+            ..ProjectHandoffSummary::default()
+        };
+    };
+
+    let generated_dir = paths.root.join(relative_path);
+    let files = [
+        "preflight.ps1",
+        "launch.ps1",
+        "run_all.ps1",
+        "aitoolkit-job.yaml",
+    ];
+
+    let mut notes = Vec::new();
+    if generated_dir.exists() {
+        notes.push(format!("Handoff folder found at {}.", relative_path));
+    } else {
+        notes.push(format!(
+            "Handoff folder was saved as {}, but it is not on disk right now.",
+            relative_path
+        ));
+    }
+    notes.push(format!(
+        "Backend selection for this saved handoff: {}.",
+        backend_selection_mode_label(spec.backend_selection_manually_overridden)
+    ));
+    let dataset_kind = WanDatasetKind::from_backend_id(&spec.training_backend_id);
+    notes.push(if dataset_kind.is_image() {
+        "This Wan 2.2 TI2V 5B image lane is currently scaffolded for AI Toolkit refinement. The browser runner can launch the generated PowerShell scaffold, but you should still treat the route as early-stage and expect local tuning."
+            .to_string()
+    } else {
+        "This Wan 2.2 TI2V 5B video lane is currently scaffolded for AI Toolkit refinement. The browser runner can launch the generated PowerShell scaffold, but you should still treat the route as early-stage and expect local tuning."
+            .to_string()
+    });
+
+    let missing_files = files
+        .iter()
+        .filter(|file| !generated_dir.join(file).exists())
+        .copied()
+        .collect::<Vec<_>>();
+    if missing_files.is_empty() {
+        notes.push("All expected AI Toolkit scaffold files are present.".to_string());
+    } else {
+        notes.push(format!(
+            "Missing generated file{}: {}.",
+            if missing_files.len() == 1 { "" } else { "s" },
+            missing_files.join(", ")
+        ));
+    }
+
+    let row_count = count_jsonl_rows(&generated_dir.join("dataset.jsonl"));
+    match row_count {
+        Some(0) => notes.push(
+            format!(
+                "No {} rows are mapped yet. This plan can be inspected, but the scaffold is not useful until the dataset contains {} files.",
+                dataset_kind.media_label(),
+                dataset_kind.media_label()
+            ),
+        ),
+        Some(count) => notes.push(format!(
+            "{} {} row{} mapped into dataset.jsonl.",
+            count,
+            dataset_kind.media_label(),
+            if count == 1 { "" } else { "s" }
+        )),
+        None => notes.push("dataset.jsonl is missing or could not be read.".to_string()),
+    }
+
+    let ready = generated_dir.exists() && missing_files.is_empty() && row_count.unwrap_or(0) > 0;
+    let mut commands = Vec::new();
+    if generated_dir.exists() && missing_files.is_empty() {
+        let preflight = generated_dir.join("preflight.ps1").display().to_string();
+        let launch = generated_dir.join("launch.ps1").display().to_string();
+        let run_all = generated_dir.join("run_all.ps1").display().to_string();
+        commands.push(PreparedProjectRunCommand {
+            label: "0. Preflight".to_string(),
+            command: format!("powershell -ExecutionPolicy Bypass -File \"{}\"", preflight),
+            description: "Checks the local Diffusers bundle, staged captioned dataset folder, AI Toolkit runtime folder, and scaffold files without training.".to_string(),
+        });
+        commands.push(PreparedProjectRunCommand {
+            label: "1. Launch scaffold".to_string(),
+            command: format!("powershell -ExecutionPolicy Bypass -File \"{}\"", launch),
+            description: "Runs the current AI Toolkit scaffold command against the local Windows checkout. Expect to refine this route while the first real Wan 2.2 5B lane is being proven.".to_string(),
+        });
+        commands.push(PreparedProjectRunCommand {
+            label: "Run scaffold flow".to_string(),
+            command: format!("powershell -ExecutionPolicy Bypass -File \"{}\"", run_all),
+            description: "Convenience command for the current AI Toolkit scaffold flow."
+                .to_string(),
+        });
+    }
+
+    ProjectHandoffSummary {
+        ready,
+        notes,
+        commands,
+        video_rows: row_count,
+        image_rows: None,
     }
 }
 
@@ -1066,6 +1207,212 @@ num_repeats = {repeats}
     ))
 }
 
+fn generate_ai_toolkit_wan22_ti2v_5b_handoff(
+    paths: &ProjectPaths,
+    dataset_path: &Path,
+    spec: &mut ProjectSpec,
+) -> Result<(String, usize, &'static str)> {
+    let lane = lane_registry::lane_definition(&spec.training_backend_id)
+        .context("could not resolve the selected training lane")?;
+    let backend_selection_mode =
+        backend_selection_mode_label(spec.backend_selection_manually_overridden);
+    let bundle = training::selected_wan22_ti2v_5b_bundle(paths).context(
+        "could not resolve the local Wan 2.2 TI2V 5B bundle yet. Chatty-lora currently expects a Diffusers bundle plus the shared T5 encoder and Wan 2.2 VAE.",
+    )?;
+
+    std::fs::create_dir_all(&paths.training_config)
+        .with_context(|| format!("could not create {}", paths.training_config.display()))?;
+    std::fs::create_dir_all(&paths.training_generated)
+        .with_context(|| format!("could not create {}", paths.training_generated.display()))?;
+    std::fs::create_dir_all(&paths.training_outputs)
+        .with_context(|| format!("could not create {}", paths.training_outputs.display()))?;
+
+    let generated_dir = paths.training_generated.join(&spec.project_slug);
+    let output_dir = paths.training_outputs.join(&spec.project_slug);
+    for folder in [
+        generated_dir.clone(),
+        output_dir.clone(),
+        output_dir.join("logs"),
+        output_dir.join("samples"),
+        output_dir.join("loras"),
+        output_dir.join("reports"),
+    ] {
+        std::fs::create_dir_all(&folder)
+            .with_context(|| format!("could not create {}", folder.display()))?;
+    }
+
+    spec.generated_training_path = Some(
+        generated_dir
+            .strip_prefix(&paths.root)
+            .unwrap_or(&generated_dir)
+            .display()
+            .to_string(),
+    );
+    spec.wan_task = Some(lane.task.to_string());
+    spec.target_frames = lane.defaults.target_frames;
+    spec.source_fps = lane.defaults.source_fps;
+    spec.frame_extraction = lane.defaults.frame_extraction.map(str::to_string);
+    spec.musubi_wsl_distro = Some(training::WSL_DISTRO.to_string());
+    spec.musubi_wsl_root = Some("~/<ai_toolkit_runtime>".to_string());
+
+    let dataset_kind = WanDatasetKind::from_backend_id(&spec.training_backend_id);
+    let media_rows = collect_media_rows(dataset_path, spec, dataset_kind);
+    let staged_dataset_dir = output_dir.join("ai_toolkit_dataset");
+    stage_ai_toolkit_dataset(&staged_dataset_dir, &media_rows)?;
+    let dataset_jsonl_path = generated_dir.join("dataset.jsonl");
+    let dataset_jsonl = media_rows
+        .iter()
+        .map(|row| {
+            json!({
+                "video_path": row.path.display().to_string(),
+                "caption": row.caption,
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        &dataset_jsonl_path,
+        if dataset_jsonl.is_empty() {
+            String::new()
+        } else {
+            format!("{dataset_jsonl}\n")
+        },
+    )
+    .with_context(|| format!("could not write {}", dataset_jsonl_path.display()))?;
+
+    let sample_prompt_path = generated_dir.join("sample_prompts.txt");
+    std::fs::write(&sample_prompt_path, build_sample_prompt(spec))
+        .with_context(|| format!("could not write {}", sample_prompt_path.display()))?;
+
+    let diffusers_bundle = bundle
+        .bundle_path
+        .as_ref()
+        .context("Wan 2.2 TI2V 5B Diffusers bundle path missing")?;
+    let ai_toolkit_root = paths.runtime.join("ai-toolkit");
+    let t5_path = bundle
+        .t5_path
+        .as_ref()
+        .context("shared UMT5 path missing")?;
+    let vae_path = bundle
+        .vae_path
+        .as_ref()
+        .context("Wan 2.2 VAE path missing")?;
+
+    let toolkit_yaml_path = generated_dir.join("aitoolkit-job.yaml");
+    std::fs::write(
+        &toolkit_yaml_path,
+        build_ai_toolkit_job_yaml(
+            spec,
+            lane,
+            dataset_kind,
+            &staged_dataset_dir,
+            diffusers_bundle,
+            t5_path,
+            vae_path,
+            &output_dir,
+            media_rows.len(),
+        ),
+    )
+    .with_context(|| format!("could not write {}", toolkit_yaml_path.display()))?;
+
+    write_script(
+        &generated_dir.join("preflight.ps1"),
+        &build_ai_toolkit_preflight_ps1(
+            &generated_dir,
+            &dataset_jsonl_path,
+            &toolkit_yaml_path,
+            &staged_dataset_dir,
+            &ai_toolkit_root,
+            diffusers_bundle,
+            t5_path,
+            vae_path,
+        ),
+    )?;
+    write_script(
+        &generated_dir.join("launch.ps1"),
+        &build_ai_toolkit_launch_ps1(&toolkit_yaml_path, &ai_toolkit_root),
+    )?;
+    write_script(
+        &generated_dir.join("run_all.ps1"),
+        &build_ai_toolkit_run_all_ps1(&generated_dir),
+    )?;
+
+    std::fs::write(
+        generated_dir.join("README.md"),
+        build_ai_toolkit_generated_readme(
+            spec,
+            lane,
+            media_rows.len(),
+            backend_selection_mode,
+            &toolkit_yaml_path,
+            &staged_dataset_dir,
+            diffusers_bundle,
+            t5_path,
+            vae_path,
+        ),
+    )
+    .with_context(|| {
+        format!(
+            "could not write {}",
+            generated_dir.join("README.md").display()
+        )
+    })?;
+
+    let plan_json = json!({
+        "project_slug": spec.project_slug,
+        "project_name": spec.project_name,
+        "dataset_slug": spec.dataset_slug,
+        "backend": &spec.training_backend_id,
+        "training_backend_id": &spec.training_backend_id,
+        "backend_selection_mode": backend_selection_mode,
+        "backend_selection_manually_overridden": spec.backend_selection_manually_overridden,
+        "lane_label": lane.label,
+        "family_id": lane.family_id,
+        "task": lane.task,
+        "dataset_kind": "video",
+        "dataset_kind": dataset_kind.media_label(),
+        "video_rows": if dataset_kind.is_video() { Some(media_rows.len()) } else { None },
+        "image_rows": if dataset_kind.is_image() { Some(media_rows.len()) } else { None },
+        "resolution": spec.resolution,
+        "target_frames": spec.target_frames,
+        "source_fps": spec.source_fps,
+        "frame_extraction": spec.frame_extraction,
+        "rank": spec.rank,
+        "epochs": spec.epochs,
+        "learning_rate": spec.learning_rate,
+        "diffusers_bundle": windows_path_to_wsl(diffusers_bundle),
+        "t5_path": windows_path_to_wsl(t5_path),
+        "vae_path": windows_path_to_wsl(vae_path),
+        "dataset_jsonl": dataset_jsonl_path.display().to_string(),
+        "staged_dataset_dir": staged_dataset_dir.display().to_string(),
+        "notes": [
+            if dataset_kind.is_image() {
+                "This is the first AI Toolkit Wan 2.2 TI2V 5B image scaffold in Chatty-lora."
+            } else {
+                "This is the first AI Toolkit Wan 2.2 TI2V 5B video scaffold in Chatty-lora."
+            },
+            "The generated scaffold now follows AI Toolkit's current sd_trainer + folder dataset shape more closely, but you should still treat it as an early local lane rather than a proven route."
+        ]
+    });
+    std::fs::write(
+        generated_dir.join("plan.json"),
+        serde_json::to_string_pretty(&plan_json)?,
+    )
+    .with_context(|| {
+        format!(
+            "could not write {}",
+            generated_dir.join("plan.json").display()
+        )
+    })?;
+
+    Ok((
+        spec.generated_training_path.clone().unwrap_or_default(),
+        media_rows.len(),
+        dataset_kind.media_label(),
+    ))
+}
+
 #[derive(Debug)]
 struct MediaRow {
     path: PathBuf,
@@ -1190,6 +1537,431 @@ fn build_sample_prompt(spec: &ProjectSpec) -> String {
         WanDatasetKind::from_backend_id(&spec.training_backend_id),
     );
     format!("{}\n", prompt)
+}
+
+fn lead_trigger_phrase(spec: &ProjectSpec) -> String {
+    effective_concept_blocks(spec)
+        .iter()
+        .find(|block| block.role == "primary" && !block.trigger_phrase.trim().is_empty())
+        .map(|block| block.trigger_phrase.trim().to_string())
+        .unwrap_or_else(|| spec.trigger_phrase.trim().to_string())
+}
+
+fn suggested_ai_toolkit_steps(spec: &ProjectSpec, media_row_count: usize) -> u32 {
+    let exposure_hint = media_row_count
+        .max(1)
+        .saturating_mul(spec.repeats.max(1) as usize)
+        .saturating_mul(spec.epochs.max(1) as usize)
+        .saturating_mul(100);
+    exposure_hint.max(500).min(4000) as u32
+}
+
+fn yaml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn yaml_path_value(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+fn pathsafe(value: &str) -> String {
+    value.replace('\\', "\\\\")
+}
+
+fn stage_ai_toolkit_dataset(staged_dataset_dir: &Path, media_rows: &[MediaRow]) -> Result<()> {
+    if staged_dataset_dir.exists() {
+        std::fs::remove_dir_all(staged_dataset_dir).with_context(|| {
+            format!(
+                "could not clear staged AI Toolkit dataset folder {}",
+                staged_dataset_dir.display()
+            )
+        })?;
+    }
+    std::fs::create_dir_all(staged_dataset_dir).with_context(|| {
+        format!(
+            "could not create staged AI Toolkit dataset folder {}",
+            staged_dataset_dir.display()
+        )
+    })?;
+
+    for (index, row) in media_rows.iter().enumerate() {
+        let ext = row
+            .path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("mp4");
+        let stem = format!("video-{:04}", index + 1);
+        let staged_media_path = staged_dataset_dir.join(format!("{stem}.{ext}"));
+        let staged_caption_path = staged_dataset_dir.join(format!("{stem}.txt"));
+
+        if let Err(link_error) = std::fs::hard_link(&row.path, &staged_media_path) {
+            std::fs::copy(&row.path, &staged_media_path).with_context(|| {
+                format!(
+                    "could not stage media file {} -> {} after hard-link failure: {}",
+                    row.path.display(),
+                    staged_media_path.display(),
+                    link_error
+                )
+            })?;
+        }
+        std::fs::write(&staged_caption_path, format!("{}\n", row.caption)).with_context(|| {
+            format!(
+                "could not write staged caption file {}",
+                staged_caption_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn build_ai_toolkit_job_yaml(
+    spec: &ProjectSpec,
+    lane: &lane_registry::TrainingLaneDefinition,
+    dataset_kind: WanDatasetKind,
+    staged_dataset_dir: &Path,
+    diffusers_bundle: &Path,
+    t5_path: &Path,
+    vae_path: &Path,
+    output_dir: &Path,
+    media_row_count: usize,
+) -> String {
+    let ai_toolkit_steps = suggested_ai_toolkit_steps(spec, media_row_count);
+    let target_frames = if dataset_kind.is_image() {
+        1
+    } else {
+        lane.defaults.target_frames.unwrap_or(17)
+    };
+    let source_fps = if dataset_kind.is_image() {
+        1
+    } else {
+        lane.defaults.source_fps.unwrap_or(16.0).round() as usize
+    };
+    let resolution = spec.resolution.max(320);
+    let dataset_video_lines = if dataset_kind.is_video() {
+        format!(
+            "          num_frames: {target_frames}\n          fps: {source_fps}\n          shrink_video_to_frames: true"
+        )
+    } else {
+        String::new()
+    };
+    let sample_video_lines = if dataset_kind.is_video() {
+        format!("        num_frames: {target_frames}\n        fps: {source_fps}")
+    } else {
+        "        num_frames: 1\n        fps: 1".to_string()
+    };
+    format!(
+        r#"# Chatty-lora scaffold for Wan 2.2 TI2V 5B via AI Toolkit
+# This file is intentionally conservative and follows the current AI Toolkit sd_trainer shape.
+job: extension
+config:
+  name: "{project_slug}"
+  process:
+    - type: 'sd_trainer'
+      training_folder: "{training_folder}"
+      device: cuda:0
+      trigger_word: "{trigger_word}"
+      performance_log_every: 100
+      network:
+        type: "lora"
+        linear: {rank}
+        linear_alpha: {rank}
+      save:
+        dtype: float16
+        save_every: 250
+        max_step_saves_to_keep: 4
+      datasets:
+        - folder_path: "{staged_dataset_dir}"
+          caption_ext: "txt"
+          caption_dropout_rate: 0.05
+          cache_latents_to_disk: true
+          resolution: [ {resolution} ]
+{dataset_video_lines}
+      train:
+        batch_size: {batch_size}
+        steps: {steps}
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "weighted"
+        optimizer: "adamw8bit"
+        lr: {learning_rate}
+        optimizer_params:
+          weight_decay: 1e-4
+        skip_first_sample: true
+        dtype: bf16
+        cache_text_embeddings: true
+      model:
+        name_or_path: "{diffusers_bundle}"
+        arch: "wan22_5b"
+        quantize: true
+        quantize_te: true
+        low_vram: true
+      sample:
+        sampler: "flowmatch"
+        sample_every: 250
+        width: {resolution}
+        height: {resolution}
+{sample_video_lines}
+        prompts:
+          - "{sample_prompt}"
+        neg: ""
+        seed: 42
+        walk_seed: true
+        guidance_scale: 5
+        sample_steps: 25
+meta:
+  name: "[name]"
+  version: "1.0"
+
+# Chatty-lora notes:
+# lane: {lane_label}
+# task: {lane_task}
+# source row count: {media_row_count}
+# shared UMT5 reference: {t5_path}
+# Wan 2.2 VAE reference: {vae_path}
+# route label: {route_label}
+# route summary: {route_summary}
+# hardware note: {hardware_note}
+"#,
+        project_slug = spec.project_slug,
+        training_folder = yaml_path_value(output_dir),
+        trigger_word = yaml_escape(&lead_trigger_phrase(spec)),
+        diffusers_bundle = yaml_path_value(diffusers_bundle),
+        staged_dataset_dir = yaml_path_value(staged_dataset_dir),
+        rank = spec.rank.max(4),
+        batch_size = spec.batch_size.max(1),
+        steps = ai_toolkit_steps,
+        learning_rate = spec.learning_rate,
+        resolution = resolution,
+        dataset_video_lines = dataset_video_lines,
+        sample_video_lines = sample_video_lines,
+        sample_prompt = yaml_escape(build_sample_prompt(spec).trim()),
+        lane_label = lane.label,
+        lane_task = lane.task,
+        media_row_count = media_row_count,
+        t5_path = yaml_path_value(t5_path),
+        vae_path = yaml_path_value(vae_path),
+        route_label = lane.defaults.route_label,
+        route_summary = lane.defaults.route_summary,
+        hardware_note = lane.defaults.hardware_note,
+    )
+}
+
+fn build_ai_toolkit_preflight_ps1(
+    generated_dir: &Path,
+    dataset_jsonl_path: &Path,
+    toolkit_yaml_path: &Path,
+    staged_dataset_dir: &Path,
+    ai_toolkit_root: &Path,
+    diffusers_bundle: &Path,
+    t5_path: &Path,
+    vae_path: &Path,
+) -> String {
+    format!(
+        r#"$ErrorActionPreference = "Stop"
+
+$GeneratedDir = "{generated_dir}"
+$DatasetJsonl = "{dataset_jsonl}"
+$ToolkitYaml = "{toolkit_yaml}"
+$StagedDatasetDir = "{staged_dataset_dir}"
+$DiffusersBundle = "{diffusers_bundle}"
+$T5Path = "{t5_path}"
+$VaePath = "{vae_path}"
+$AiToolkitRoot = if ($env:AI_TOOLKIT_ROOT) {{ $env:AI_TOOLKIT_ROOT }} else {{ "{default_ai_toolkit_root}" }}
+
+function Fail($Message) {{
+  Write-Error $Message
+  exit 1
+}}
+
+function Pass($Message) {{
+  Write-Host "OK: $Message"
+}}
+
+if (-not (Test-Path $GeneratedDir -PathType Container)) {{ Fail "Generated handoff folder missing: $GeneratedDir" }}
+if (-not (Test-Path $DatasetJsonl -PathType Leaf)) {{ Fail "dataset.jsonl missing: $DatasetJsonl" }}
+if (-not (Test-Path $ToolkitYaml -PathType Leaf)) {{ Fail "aitoolkit-job.yaml missing: $ToolkitYaml" }}
+if (-not (Test-Path $StagedDatasetDir -PathType Container)) {{ Fail "Staged AI Toolkit dataset folder missing: $StagedDatasetDir" }}
+if (-not (Test-Path $DiffusersBundle -PathType Container)) {{ Fail "Wan 2.2 TI2V 5B Diffusers bundle missing: $DiffusersBundle" }}
+if (-not (Test-Path (Join-Path $DiffusersBundle "model_index.json") -PathType Leaf)) {{ Fail "Diffusers bundle is missing model_index.json: $DiffusersBundle" }}
+if (-not (Test-Path $T5Path -PathType Leaf)) {{ Fail "Shared UMT5 encoder missing: $T5Path" }}
+if (-not (Test-Path $VaePath -PathType Leaf)) {{ Fail "Wan 2.2 VAE missing: $VaePath" }}
+
+$requiredToolkitEntries = @("run.py", "requirements.txt", "toolkit", "config\\examples", "ui")
+foreach ($entry in $requiredToolkitEntries) {{
+  if (-not (Test-Path (Join-Path $AiToolkitRoot $entry))) {{
+    Fail "AI Toolkit runtime is missing expected entry '$entry' under $AiToolkitRoot"
+  }}
+}}
+Pass "AI Toolkit root found at $AiToolkitRoot"
+
+$mediaExtensions = @(".mp4", ".mov", ".mkv", ".avi", ".webm", ".png", ".jpg", ".jpeg", ".webp", ".bmp")
+$videoCount = (Get-ChildItem -Path $StagedDatasetDir -File | Where-Object {{ $mediaExtensions -contains $_.Extension.ToLowerInvariant() }}).Count
+$captionCount = (Get-ChildItem -Path $StagedDatasetDir -Filter *.txt -File).Count
+if ($videoCount -le 0) {{ Fail "Staged dataset folder has no media files: $StagedDatasetDir" }}
+if ($captionCount -lt $videoCount) {{ Fail "Staged dataset folder has fewer captions than media files: $captionCount captions for $videoCount media files" }}
+Pass "$videoCount staged media file(s) with $captionCount caption file(s) detected"
+
+$pythonExe = @(
+  (Join-Path $AiToolkitRoot "venv\\Scripts\\python.exe"),
+  (Join-Path $AiToolkitRoot ".venv\\Scripts\\python.exe"),
+  "python"
+) | Where-Object {{ $_ -eq "python" -or (Test-Path $_ -PathType Leaf) }} | Select-Object -First 1
+
+& $pythonExe -c "import yaml, torch, torchaudio; print('OK: yaml import succeeded'); print(f'OK: torch {{torch.__version__}}'); print(f'OK: torchaudio {{torchaudio.__version__}}')"
+if ($LASTEXITCODE -ne 0) {{ Fail "Python dependency import check failed for yaml/torch/torchaudio" }}
+"#,
+        generated_dir = generated_dir.display(),
+        dataset_jsonl = dataset_jsonl_path.display(),
+        toolkit_yaml = toolkit_yaml_path.display(),
+        staged_dataset_dir = staged_dataset_dir.display(),
+        diffusers_bundle = diffusers_bundle.display(),
+        t5_path = t5_path.display(),
+        vae_path = vae_path.display(),
+        default_ai_toolkit_root = pathsafe(&ai_toolkit_root.display().to_string()),
+    )
+}
+
+fn build_ai_toolkit_launch_ps1(toolkit_yaml_path: &Path, ai_toolkit_root: &Path) -> String {
+    format!(
+        r#"$ErrorActionPreference = "Stop"
+
+$ToolkitYaml = "{toolkit_yaml}"
+$AiToolkitRoot = if ($env:AI_TOOLKIT_ROOT) {{ $env:AI_TOOLKIT_ROOT }} else {{ "{default_ai_toolkit_root}" }}
+
+if (-not (Test-Path $AiToolkitRoot -PathType Container)) {{
+  Write-Error "AI Toolkit root was not found at $AiToolkitRoot"
+  exit 1
+}}
+
+$pythonExe = @(
+  (Join-Path $AiToolkitRoot "venv\\Scripts\\python.exe"),
+  (Join-Path $AiToolkitRoot ".venv\\Scripts\\python.exe"),
+  "python"
+) | Where-Object {{ $_ -eq "python" -or (Test-Path $_ -PathType Leaf) }} | Select-Object -First 1
+
+Set-Location $AiToolkitRoot
+Write-Host "Chatty-lora Wan 2.2 TI2V 5B scaffold"
+Write-Host "Using AI Toolkit root: $AiToolkitRoot"
+Write-Host "Running: $pythonExe run.py $ToolkitYaml"
+& $pythonExe "run.py" $ToolkitYaml
+if ($LASTEXITCODE -ne 0) {{
+  exit $LASTEXITCODE
+}}
+"#,
+        toolkit_yaml = toolkit_yaml_path.display(),
+        default_ai_toolkit_root = pathsafe(&ai_toolkit_root.display().to_string()),
+    )
+}
+
+fn build_ai_toolkit_run_all_ps1(generated_dir: &Path) -> String {
+    format!(
+        r#"$ErrorActionPreference = "Stop"
+
+& "{preflight}"
+& "{launch}"
+"#,
+        preflight = generated_dir.join("preflight.ps1").display(),
+        launch = generated_dir.join("launch.ps1").display(),
+    )
+}
+
+fn build_ai_toolkit_generated_readme(
+    spec: &ProjectSpec,
+    lane: &lane_registry::TrainingLaneDefinition,
+    video_count: usize,
+    backend_selection_mode: &str,
+    toolkit_yaml_path: &Path,
+    staged_dataset_dir: &Path,
+    diffusers_bundle: &Path,
+    t5_path: &Path,
+    vae_path: &Path,
+) -> String {
+    format!(
+        r#"# Wan 2.2 TI2V 5B AI Toolkit handoff: {project}
+
+This folder was generated by Chatty-lora for the first scaffolded `Wan 2.2 TI2V 5B` lane.
+
+Training lane: {lane_label}
+Task: {lane_task}
+Backend id: {backend_id}
+Backend selection: {backend_selection_mode}
+
+Video rows detected: {video_count}
+
+Current local model assumptions:
+
+- Diffusers bundle: `{diffusers_bundle}`
+- Shared UMT5 encoder: `{t5_path}`
+- Wan 2.2 VAE: `{vae_path}`
+- Staged AI Toolkit dataset folder: `{staged_dataset_dir}`
+
+Current status:
+
+- This is a scaffolded AI Toolkit route, not a proven in-browser runner lane yet.
+- Chatty-lora can now detect the local bundle, stage a folder dataset with sidecar `.txt` captions, and generate a first-pass YAML/job folder that matches AI Toolkit's current `sd_trainer` examples more closely.
+- Expect to refine `aitoolkit-job.yaml` and possibly `launch.ps1` against your local AI Toolkit version.
+- This lane is being positioned as the more achievable eventual Wan 2.2 verification target than the heavier Wan 2.2 14B path.
+
+Suggested manual flow from Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "{preflight}"
+powershell -ExecutionPolicy Bypass -File "{launch}"
+```
+
+Key files:
+
+- `dataset.jsonl`
+- `aitoolkit-job.yaml`
+- `preflight.ps1`
+- `launch.ps1`
+- `run_all.ps1`
+
+Route profile:
+
+- {route_label}
+- {route_summary}
+- {hardware_note}
+
+Project settings captured here:
+
+- Resolution: {resolution}
+- Target frames: {target_frames}
+- Source fps: {source_fps}
+- Rank: {rank}
+- Epochs: {epochs}
+- Batch size: {batch_size}
+- Learning rate: {learning_rate}
+
+If you improve this lane on real hardware or a newer AI Toolkit revision, please feed those refinements back into Chatty-lora.
+"#,
+        project = spec.project_slug,
+        lane_label = lane.label,
+        lane_task = lane.task,
+        backend_id = spec.training_backend_id,
+        backend_selection_mode = backend_selection_mode,
+        video_count = video_count,
+        diffusers_bundle = diffusers_bundle.display(),
+        t5_path = t5_path.display(),
+        vae_path = vae_path.display(),
+        staged_dataset_dir = staged_dataset_dir.display(),
+        preflight = toolkit_yaml_path.with_file_name("preflight.ps1").display(),
+        launch = toolkit_yaml_path.with_file_name("launch.ps1").display(),
+        route_label = lane.defaults.route_label,
+        route_summary = lane.defaults.route_summary,
+        hardware_note = lane.defaults.hardware_note,
+        resolution = spec.resolution,
+        target_frames = lane.defaults.target_frames.unwrap_or(17),
+        source_fps = lane.defaults.source_fps.unwrap_or(16.0),
+        rank = spec.rank.max(4),
+        epochs = spec.epochs.max(1),
+        batch_size = spec.batch_size.max(1),
+        learning_rate = spec.learning_rate,
+    )
 }
 
 struct WanScriptContext {

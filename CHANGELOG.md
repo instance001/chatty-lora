@@ -13,6 +13,7 @@
 - Exploratory `Musubi Tuner / Wan 2.1 T2V 14B` lane support with task-aware handoff generation, 14B DiT detection, and Builder suggestion/ranking that can distinguish `Wan 14B` from the `1.3B` Wan path.
 - Tightened the exploratory `Wan 14B` route around the only local variant that reached live training so far: BF16-loaded DiT weights, lower visible defaults, stronger WSL RAM+swap warnings, persisted per-run logs, and more explicit docs that this lane can still exceed a 32GB-class Windows box even after training starts.
 - Updated the `Wan 14B` docs to frame the lane more honestly: it now clearly says the route shows promise and can reach live training, but it was not validated end to end on the current 32GB test rig because system RAM plus WSL swap appear to be the real limiter. The docs now explicitly invite open-expectation testing and refinement from stronger hardware.
+- First scaffolded `AI Toolkit / Wan 2.2 TI2V 5B` groundwork: dedicated backend and lane registry entries, local Diffusers-bundle detection, base-model picker support, and generated handoff folders that prepare dataset JSONL and an initial AI Toolkit job scaffold without pretending the route is proven yet.
 
 ### Changed
 
@@ -51,3 +52,4 @@ Initial public-source preparation for Chatty-lora.
 - Web crawling is constrained by robots rules, login walls, anti-scraping systems, JavaScript-only feeds, rate limits, expiring URLs, and site terms.
 - Chatty-lora does not try to bypass private feeds, social-media protections, CAPTCHAs, or platform access controls.
 - Training history is still lightweight; the saved plan card and output folders are the main run records for now.
+- clarified the `AI Toolkit / Wan 2.2 TI2V 5B` runtime expectation: Chatty-lora now documents `runtime/ai-toolkit/` as the shared repo-root checkout for this lane and future Diffusers-style trainer routes like Flux, SDXL, SD 1.5, and newer Wan or audio-capable workflows

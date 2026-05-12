@@ -3,9 +3,14 @@ use crate::model_registry;
 pub const MUSUBI_WAN_BACKEND_ID: &str = "musubi_wan21_t2v_1_3b";
 pub const MUSUBI_WAN_IMAGE_BACKEND_ID: &str = "musubi_wan21_t2v_1_3b_image";
 pub const MUSUBI_WAN_14B_BACKEND_ID: &str = "musubi_wan21_t2v_14b";
+pub const AI_TOOLKIT_WAN22_5B_BACKEND_ID: &str = "ai_toolkit_wan22_ti2v_5b";
+pub const AI_TOOLKIT_WAN22_5B_IMAGE_BACKEND_ID: &str = "ai_toolkit_wan22_ti2v_5b_image";
 pub const MUSUBI_WAN_LABEL: &str = "Musubi Tuner / Wan 2.1 T2V 1.3B";
 pub const MUSUBI_WAN_IMAGE_LABEL: &str = "Musubi Tuner / Wan 2.1 T2V 1.3B / Image visual LoRA";
 pub const MUSUBI_WAN_14B_LABEL: &str = "Musubi Tuner / Wan 2.1 T2V 14B";
+pub const AI_TOOLKIT_WAN22_5B_LABEL: &str = "AI Toolkit / Wan 2.2 TI2V 5B";
+pub const AI_TOOLKIT_WAN22_5B_IMAGE_LABEL: &str =
+    "AI Toolkit / Wan 2.2 TI2V 5B / Image visual LoRA";
 
 #[derive(Clone, Copy)]
 pub struct BackendDefinition {
@@ -59,6 +64,36 @@ pub const BACKENDS: &[BackendDefinition] = &[
         ],
     },
     BackendDefinition {
+        id: AI_TOOLKIT_WAN22_5B_BACKEND_ID,
+        name: AI_TOOLKIT_WAN22_5B_LABEL,
+        description: "A planned Wan 2.2 TI2V 5B lane for the Diffusers-style AI Toolkit workflow rather than the current Musubi safetensors route.",
+        best_for: "A more achievable next-step Wan 2.2 lane once the local Diffusers bundle and shared AI Toolkit runtime are in place.",
+        compatible_family_ids: &[model_registry::WAN_FAMILY_ID],
+        folder_candidates: &["ai_toolkit", "ai-toolkit"],
+        marker_files: &[
+            "run.py",
+            "requirements.txt",
+            "toolkit",
+            "config/examples",
+            "ui",
+        ],
+    },
+    BackendDefinition {
+        id: AI_TOOLKIT_WAN22_5B_IMAGE_BACKEND_ID,
+        name: AI_TOOLKIT_WAN22_5B_IMAGE_LABEL,
+        description: "A sibling Wan 2.2 TI2V 5B lane for still-image visual LoRAs through the same local Diffusers-style AI Toolkit workflow.",
+        best_for: "The simpler Wan 2.2 image-first path: proving the runtime and LoRA flow on stills before pushing the heavier video lane.",
+        compatible_family_ids: &[model_registry::WAN_FAMILY_ID],
+        folder_candidates: &["ai_toolkit", "ai-toolkit"],
+        marker_files: &[
+            "run.py",
+            "requirements.txt",
+            "toolkit",
+            "config/examples",
+            "ui",
+        ],
+    },
+    BackendDefinition {
         id: "kohya_ss",
         name: "kohya_ss / sd-scripts",
         description: "A common image LoRA training lane for Stable Diffusion style workflows.",
@@ -75,11 +110,20 @@ pub const BACKENDS: &[BackendDefinition] = &[
     BackendDefinition {
         id: "ai_toolkit",
         name: "AI Toolkit",
-        description: "A more modern trainer lane often used for Flux-style and newer LoRA workflows.",
-        best_for: "Flux and newer image LoRA pipelines.",
-        compatible_family_ids: &[model_registry::FLUX_FAMILY_ID],
+        description: "A broader Diffusers-style trainer suite that now spans Flux, Wan video, SDXL, SD 1.5, and newer image or audio-adjacent workflows.",
+        best_for: "Future Flux, Wan Diffusers, SDXL, SD 1.5, and other modern non-Musubi lanes that can share one local AI Toolkit checkout.",
+        compatible_family_ids: &[
+            model_registry::FLUX_FAMILY_ID,
+            model_registry::AUDIO_FAMILY_ID,
+        ],
         folder_candidates: &["ai_toolkit", "ai-toolkit"],
-        marker_files: &["run.py", "requirements.txt", "toolkit"],
+        marker_files: &[
+            "run.py",
+            "requirements.txt",
+            "toolkit",
+            "config/examples",
+            "ui",
+        ],
     },
     BackendDefinition {
         id: "onetrainer",

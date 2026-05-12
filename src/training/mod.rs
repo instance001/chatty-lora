@@ -12,6 +12,11 @@ use crate::{
 pub const WSL_DISTRO: &str = "Ubuntu-24.04";
 pub const WSL_MUSUBI_ROOT: &str = "~/train_runtime/musubi-tuner";
 pub const WSL_ENV_PREFIX: &str = "export LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm-7.2.2/lib:/usr/local/lib:${LD_LIBRARY_PATH:-}; export HSA_ENABLE_DXG_DETECTION=1; export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1";
+const WAN22_TI2V_5B_DIFFUSERS_CANDIDATES: &[&str] = &[
+    "models/wan/diffusers/Wan2.2-TI2V-5B-Diffusers",
+    "models/wan/diffusers/wan2.2-ti2v-5b-diffusers",
+    "models/wan/diffusers/Wan2.2_TI2V_5B_Diffusers",
+];
 
 #[derive(Clone, Copy)]
 struct WanFileDefinition {
@@ -89,11 +94,19 @@ pub fn scan_backends_with_wan_status(
         musubi_wan_video_backend(wan_status.clone()),
         musubi_wan_image_backend(wan_status),
         musubi_wan_14b_backend(scan_wan_training(paths)),
+        ai_toolkit_wan22_5b_backend(paths, backend_registry::AI_TOOLKIT_WAN22_5B_BACKEND_ID),
+        ai_toolkit_wan22_5b_backend(
+            paths,
+            backend_registry::AI_TOOLKIT_WAN22_5B_IMAGE_BACKEND_ID,
+        ),
     ];
     backends.extend(
         backend_registry::BACKENDS
             .iter()
-            .filter(|definition| !is_musubi_wan_backend(definition.id))
+            .filter(|definition| {
+                !is_musubi_wan_backend(definition.id)
+                    && !is_ai_toolkit_wan22_5b_backend(definition.id)
+            })
             .map(|definition| build_summary(paths, definition)),
     );
     backends
@@ -115,6 +128,11 @@ pub fn is_musubi_wan_backend(id: &str) -> bool {
     id == backend_registry::MUSUBI_WAN_BACKEND_ID
         || id == backend_registry::MUSUBI_WAN_IMAGE_BACKEND_ID
         || id == backend_registry::MUSUBI_WAN_14B_BACKEND_ID
+}
+
+pub fn is_ai_toolkit_wan22_5b_backend(id: &str) -> bool {
+    id == backend_registry::AI_TOOLKIT_WAN22_5B_BACKEND_ID
+        || id == backend_registry::AI_TOOLKIT_WAN22_5B_IMAGE_BACKEND_ID
 }
 
 #[derive(Clone)]
@@ -391,6 +409,120 @@ fn musubi_wan_14b_backend(status: WanTrainingStatus) -> TrainingBackendSummary {
     }
 }
 
+fn ai_toolkit_wan22_5b_backend(
+    paths: &ProjectPaths,
+    backend_id: &'static str,
+) -> TrainingBackendSummary {
+    let definition = backend_registry::backend_definition(backend_id)
+        .expect("ai toolkit wan22 5b backend definition should exist");
+    let lane = lane_registry::lane_definition(definition.id)
+        .expect("ai toolkit wan22 5b lane definition should exist");
+    let runtime_root = &paths.runtime;
+    let detected_folder = detect_trainer_root(runtime_root, definition);
+    let runtime_ready = detected_folder.is_some();
+    let bundle = resolve_wan22_5b_bundle(paths);
+    let mut notes = Vec::new();
+    if let Some(folder) = detected_folder.as_ref() {
+        notes.push(format!(
+            "Detected AI Toolkit folder at {}.",
+            folder.strip_prefix(&paths.root).unwrap_or(folder).display()
+        ));
+        if runtime_ready {
+            notes.push(
+                "AI Toolkit marker files were found, including the usual repo-root launcher shape."
+                    .to_string(),
+            );
+        } else {
+            notes.push(
+                "The AI Toolkit folder exists, but the usual repo-root entry files were not all detected yet."
+                    .to_string(),
+            );
+        }
+    } else {
+        notes.push(
+            "No local AI Toolkit folder detected yet under runtime/ai_toolkit or runtime/ai-toolkit. Chatty-lora expects the repo root here, with files like run.py, requirements.txt, toolkit/, config/examples/, and ui/."
+                .to_string(),
+        );
+    }
+    if bundle.model_bundle_ready {
+        if lane.dataset_kind == lane_registry::TrainingDatasetKind::Image {
+            notes.push(
+                "Wan 2.2 TI2V 5B local model bundle looks complete enough for the image-first scaffolded lane."
+                    .to_string(),
+            );
+        } else {
+            notes.push(
+                "Wan 2.2 TI2V 5B local model bundle looks complete enough for the scaffolded lane."
+                    .to_string(),
+            );
+        }
+    } else {
+        notes.push(format!(
+            "Wan 2.2 TI2V 5B bundle is incomplete. Chatty-lora currently expects a Diffusers bundle under {} plus the shared UMT5 encoder and Wan 2.2 VAE.",
+            model_registry::family_diffusers_relative_root(model_registry::WAN_FAMILY_ID)
+                .unwrap_or("models/wan/diffusers")
+        ));
+    }
+    if let Some(relative_root) = &bundle.bundle_relative_root {
+        notes.push(format!(
+            "Selected Wan 2.2 TI2V 5B Diffusers bundle: {}.",
+            relative_root
+        ));
+    }
+    notes.push(
+        "This lane is scaffolded for AI Toolkit groundwork in Chatty-lora. The builder can prepare the handoff folder, and the in-browser runner can now launch the generated PowerShell scaffold."
+            .to_string(),
+    );
+    notes.push(if lane.dataset_kind == lane_registry::TrainingDatasetKind::Image {
+        "Wan 2.2 5B image-first LoRAs are being treated as the more practical first verified target than the heavier video and 14B routes, but the exact AI Toolkit launch recipe is still expected to evolve."
+            .to_string()
+    } else {
+        "Wan 2.2 5B is being treated as the more realistic next verified Wan 2.2 target than the heavier 14B routes, but the exact AI Toolkit launch recipe is still expected to evolve."
+            .to_string()
+    });
+    notes.push(
+        "A single local AI Toolkit checkout is intended to be reusable across future Diffusers-style lanes too, such as Flux, SDXL, SD 1.5, and other newer image or video workflows."
+            .to_string(),
+    );
+
+    TrainingBackendSummary {
+        id: definition.id.to_string(),
+        name: definition.name.to_string(),
+        description: definition.description.to_string(),
+        best_for: definition.best_for.to_string(),
+        lane_label: Some(lane.label.to_string()),
+        lane_dataset_kind: Some(lane.dataset_kind.media_label().to_string()),
+        lane_task: Some(lane.task.to_string()),
+        compatible_family_ids: vec![model_registry::WAN_FAMILY_ID.to_string()],
+        compatible_family_labels: backend_registry::compatible_family_labels(definition),
+        model_bundle_ready: Some(bundle.model_bundle_ready),
+        selected_dit_relative_path: bundle.bundle_relative_root.clone(),
+        recommended_defaults: Some(WanTrainingDefaults {
+            resolution: lane.defaults.resolution,
+            target_frames: lane.defaults.target_frames.unwrap_or(17),
+            source_fps: lane.defaults.source_fps.unwrap_or(16.0),
+            batch_size: lane.defaults.batch_size,
+            rank: lane.defaults.rank,
+            epochs: lane.defaults.epochs,
+            learning_rate: lane.defaults.learning_rate,
+            blocks_to_swap: lane.defaults.blocks_to_swap,
+            route_label: lane.defaults.route_label.to_string(),
+            route_summary: lane.defaults.route_summary.to_string(),
+            hardware_note: lane.defaults.hardware_note.to_string(),
+            exploratory: lane.defaults.exploratory,
+        }),
+        ready: bundle.model_bundle_ready && runtime_ready,
+        relative_path: detected_folder.as_ref().map(|folder| {
+            folder
+                .strip_prefix(&paths.root)
+                .unwrap_or(folder)
+                .display()
+                .to_string()
+        }),
+        notes,
+    }
+}
+
 fn wan_file_status(paths: &ProjectPaths, definition: WanFileDefinition) -> WanModelFileStatus {
     let resolved_relative_path = resolve_existing_wan_relative_path(paths, definition)
         .unwrap_or_else(|| definition.primary_relative_path.to_string());
@@ -427,9 +559,52 @@ fn select_dit_path_for_task(files: &[WanModelFileStatus], task: &str) -> Option<
 }
 
 pub fn wan_bundle_ready_for_backend(paths: &ProjectPaths, backend_id: &str) -> bool {
+    if is_ai_toolkit_wan22_5b_backend(backend_id) {
+        return resolve_wan22_5b_bundle(paths).model_bundle_ready;
+    }
     resolve_wan_lane_bundle(paths, backend_id)
         .map(|bundle| bundle.model_bundle_ready)
         .unwrap_or(false)
+}
+
+#[derive(Debug, Clone)]
+pub struct Wan22Ti2v5bBundleStatus {
+    pub model_bundle_ready: bool,
+    pub bundle_relative_root: Option<String>,
+    pub bundle_path: Option<PathBuf>,
+    pub t5_path: Option<PathBuf>,
+    pub vae_path: Option<PathBuf>,
+}
+
+pub fn selected_wan22_ti2v_5b_bundle(paths: &ProjectPaths) -> Option<Wan22Ti2v5bBundleStatus> {
+    let bundle = resolve_wan22_5b_bundle(paths);
+    bundle.model_bundle_ready.then_some(bundle)
+}
+
+fn resolve_wan22_5b_bundle(paths: &ProjectPaths) -> Wan22Ti2v5bBundleStatus {
+    let bundle_relative_root = WAN22_TI2V_5B_DIFFUSERS_CANDIDATES
+        .iter()
+        .find(|relative| paths.root.join(relative).join("model_index.json").exists())
+        .map(|relative| (*relative).to_string());
+    let bundle_path = bundle_relative_root
+        .as_ref()
+        .map(|relative| paths.root.join(relative));
+    let t5_path = resolved_wan_file_path(paths, "Text encoder");
+    let vae_path = [
+        "models/wan/dependencies/vae/wan2.2_vae.safetensors",
+        "models/wan/dependencies/vae/Wan2.2_VAE.pth",
+    ]
+    .iter()
+    .map(|relative| paths.root.join(relative))
+    .find(|path| path.exists());
+    let model_bundle_ready = bundle_path.is_some() && t5_path.is_some() && vae_path.is_some();
+    Wan22Ti2v5bBundleStatus {
+        model_bundle_ready,
+        bundle_relative_root,
+        bundle_path,
+        t5_path,
+        vae_path,
+    }
 }
 
 fn resolve_wan_lane_bundle(paths: &ProjectPaths, backend_id: &str) -> Option<WanLaneBundleStatus> {
@@ -526,16 +701,8 @@ fn build_summary(
     definition: &backend_registry::BackendDefinition,
 ) -> TrainingBackendSummary {
     let runtime_root = &paths.runtime;
-    let detected_folder = definition
-        .folder_candidates
-        .iter()
-        .map(|candidate| runtime_root.join(candidate))
-        .find(|folder| folder.exists());
-
-    let ready = detected_folder
-        .as_ref()
-        .map(|folder| has_marker(folder, definition.marker_files))
-        .unwrap_or(false);
+    let detected_folder = detect_trainer_root(runtime_root, definition);
+    let ready = detected_folder.is_some();
 
     let relative_path = detected_folder.as_ref().map(|folder| {
         folder
@@ -597,4 +764,40 @@ fn build_summary(
 
 fn has_marker(folder: &Path, markers: &[&str]) -> bool {
     markers.iter().any(|marker| folder.join(marker).exists())
+}
+
+fn detect_trainer_root(
+    runtime_root: &Path,
+    definition: &backend_registry::BackendDefinition,
+) -> Option<PathBuf> {
+    definition.folder_candidates.iter().find_map(|candidate| {
+        let candidate_root = runtime_root.join(candidate);
+        find_trainer_root_from_candidate(&candidate_root, definition.marker_files, 0)
+    })
+}
+
+fn find_trainer_root_from_candidate(
+    folder: &Path,
+    markers: &[&str],
+    depth: usize,
+) -> Option<PathBuf> {
+    if !folder.exists() {
+        return None;
+    }
+    if has_marker(folder, markers) {
+        return Some(folder.to_path_buf());
+    }
+    if depth >= 2 {
+        return None;
+    }
+    let entries = std::fs::read_dir(folder).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_trainer_root_from_candidate(&path, markers, depth + 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }

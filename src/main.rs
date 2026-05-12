@@ -612,6 +612,19 @@ fn build_dashboard(paths: &ProjectPaths) -> Result<DashboardResponse> {
                 .to_string(),
         });
     }
+    if training::wan_bundle_ready_for_backend(
+        paths,
+        backend_registry::AI_TOOLKIT_WAN22_5B_BACKEND_ID,
+    ) {
+        base_model_options.push(BaseModelOption {
+            value: "Wan 2.2 TI2V 5B Diffusers bundle".to_string(),
+            label: "Wan 2.2 TI2V 5B Diffusers bundle".to_string(),
+            family_id: model_registry::WAN_FAMILY_ID.to_string(),
+            family_label: "Wan".to_string(),
+            detail: "Resolved from the planned Wan 2.2 TI2V 5B Diffusers bundle plus the shared Wan dependency files used by the new AI Toolkit lane scaffold."
+                .to_string(),
+        });
+    }
     base_model_options.extend(model_summary.families.iter().flat_map(|family| {
         if !model_registry::include_family_in_training_base_model_picker(&family.id) {
             return Vec::new().into_iter();

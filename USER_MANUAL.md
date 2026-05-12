@@ -367,10 +367,15 @@ The first real backend targets are:
 - `Musubi Tuner / Wan 2.1 T2V 1.3B`
 - `Musubi Tuner / Wan 2.1 T2V 1.3B / Image visual LoRA`
 - `Musubi Tuner / Wan 2.1 T2V 14B`
+- `AI Toolkit / Wan 2.2 TI2V 5B`
 
 Choosing a backend does not start training by itself. It shapes the saved plan and generated WSL files. Once the plan card is saved and marked ready, the `Run this saved plan` button can launch the sequence.
 
 The `Wan 2.1 T2V 14B` option is intentionally not framed as the default safe starter route. It uses the same Musubi handoff shape, but it is much heavier than the proven `1.3B` lane and should be treated as an intentional stronger-hardware experiment. Chatty-lora now squeezes that lane down on purpose for first-pass survival: very low resolution, fewer frames, tiny rank, and near-maximum block swap before you try to scale it back up. On the current WSL + ROCm test rig, the only `14B` route that reached live training used BF16-loaded weights instead of the earlier FP8 weight-cast path, and it still could not be validated end to end. On the current author test box, the likely limiter is system RAM plus WSL swap rather than the 8GB GPU itself, and the lane appears to want slightly more than a 32GB-class Windows setup for reliable completion. Proceed with open expectations, and please treat successful testing, refinements, and stronger-hardware reports as genuinely helpful contributions back to the project.
+
+The new `AI Toolkit / Wan 2.2 TI2V 5B` option is the first planned non-Musubi Wan lane in Chatty-lora. It is being positioned as the more achievable eventual Wan 2.2 verification target than the heavier Wan 2.2 14B route. Today, Chatty-lora can detect the expected local bundle shape, build the dataset JSONL, and generate a first scaffold handoff folder, but you should still treat the launch recipe as early groundwork until the local AI Toolkit workflow is proven end to end.
+
+This lane also expects a separate local AI Toolkit runtime checkout under `runtime/ai-toolkit/` or `runtime/ai_toolkit/`. Chatty-lora treats that runtime as a shared trainer bucket for future Diffusers-style lanes too, not just this Wan experiment. The current upstream AI Toolkit project explicitly covers Flux, SDXL, SD 1.5, Wan video models including `Wan2.2-TI2V-5B`, and even newer audio-capable families, so it is the natural home for future non-Musubi routes.
 
 The Builder now helps more actively here:
 - it groups base models by family

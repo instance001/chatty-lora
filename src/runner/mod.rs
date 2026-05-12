@@ -34,6 +34,13 @@ struct RunnerStage {
     id: &'static str,
     label: &'static str,
     script_name: &'static str,
+    execution: StageExecution,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StageExecution {
+    WslBash,
+    PowerShell,
 }
 
 const FULL_STAGES: &[RunnerStage] = &[
@@ -41,21 +48,40 @@ const FULL_STAGES: &[RunnerStage] = &[
         id: "preflight",
         label: "Preflight",
         script_name: "preflight.sh",
+        execution: StageExecution::WslBash,
     },
     RunnerStage {
         id: "cache_latents",
         label: "Cache latents",
         script_name: "cache_latents.sh",
+        execution: StageExecution::WslBash,
     },
     RunnerStage {
         id: "cache_text",
         label: "Cache text",
         script_name: "cache_text.sh",
+        execution: StageExecution::WslBash,
     },
     RunnerStage {
         id: "train",
         label: "Train LoRA",
         script_name: "launch.sh",
+        execution: StageExecution::WslBash,
+    },
+];
+
+const AI_TOOLKIT_FULL_STAGES: &[RunnerStage] = &[
+    RunnerStage {
+        id: "preflight",
+        label: "Preflight",
+        script_name: "preflight.ps1",
+        execution: StageExecution::PowerShell,
+    },
+    RunnerStage {
+        id: "train",
+        label: "Launch scaffold",
+        script_name: "launch.ps1",
+        execution: StageExecution::PowerShell,
     },
 ];
 
@@ -82,6 +108,8 @@ struct RunnerInner {
 struct ProjectSpecForRun {
     project_slug: String,
     training_backend_id: String,
+    #[serde(default)]
+    base_model: String,
     generated_training_path: Option<String>,
 }
 
@@ -91,6 +119,7 @@ struct ResolvedTrainingRun {
     mode: String,
     generated_dir: PathBuf,
     stages: Vec<RunnerStage>,
+    backend_id: String,
 }
 
 #[derive(Debug, Default)]
@@ -157,8 +186,15 @@ impl TrainingRunner {
             &format!("Run log will be written to {}.", display_path(&log_file)),
         )
         .await;
-        self.push_log("runner", "system", "Starting guided training sequence.")
-            .await;
+        self.push_log(
+            "runner",
+            "system",
+            &format!(
+                "Starting guided training sequence for backend {}.",
+                run.backend_id
+            ),
+        )
+        .await;
 
         let runner = Arc::clone(&self);
         tokio::spawn(async move {
@@ -246,17 +282,40 @@ impl TrainingRunner {
         self.set_current_stage(stage.id, &format!("Running {}.", stage.label))
             .await;
 
-        let script = sh_quote(&windows_path_to_wsl(script_path));
-        let command = format!("bash {script}");
-        self.push_log(stage.id, "command", &format!("wsl bash -lc {command}"))
-            .await;
-
-        let mut child = Command::new("wsl")
-            .args(["-d", training::WSL_DISTRO, "--", "bash", "-lc", &command])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("could not start {}", stage.label))?;
+        let mut child = match stage.execution {
+            StageExecution::WslBash => {
+                let script = sh_quote(&windows_path_to_wsl(script_path));
+                let command = format!("bash {script}");
+                self.push_log(stage.id, "command", &format!("wsl bash -lc {command}"))
+                    .await;
+                Command::new("wsl")
+                    .args(["-d", training::WSL_DISTRO, "--", "bash", "-lc", &command])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .with_context(|| format!("could not start {}", stage.label))?
+            }
+            StageExecution::PowerShell => {
+                let script = display_path(script_path);
+                self.push_log(
+                    stage.id,
+                    "command",
+                    &format!("powershell -ExecutionPolicy Bypass -File \"{script}\""),
+                )
+                .await;
+                Command::new("powershell")
+                    .args([
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        script_path.as_os_str().to_string_lossy().as_ref(),
+                    ])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .with_context(|| format!("could not start {}", stage.label))?
+            }
+        };
 
         {
             let mut inner = self.inner.lock().await;
@@ -435,13 +494,26 @@ fn resolve_training_run(
     let spec: ProjectSpecForRun = serde_json::from_str(&contents)
         .with_context(|| format!("could not parse {}", project_path.display()))?;
 
-    if !training::is_musubi_wan_backend(&spec.training_backend_id) {
-        bail!("Only the Wan/Musubi backends can run from the UI in this build.");
+    let backend_id = normalize_runner_backend_id(&spec);
+    let supported_backend = training::is_musubi_wan_backend(&backend_id)
+        || training::is_ai_toolkit_wan22_5b_backend(&backend_id);
+    if !supported_backend {
+        bail!(
+            "This backend is not wired into the in-browser runner yet. Try a Wan/Musubi lane or the AI Toolkit / Wan 2.2 TI2V 5B lane."
+        );
     }
 
-    let Some(relative_path) = spec.generated_training_path else {
-        bail!("This saved plan does not have a generated Wan/Musubi handoff folder.");
-    };
+    let relative_path = spec
+        .generated_training_path
+        .clone()
+        .or_else(|| infer_generated_training_path(paths, project_slug))
+        .with_context(|| {
+            if training::is_ai_toolkit_wan22_5b_backend(&backend_id) {
+                "This saved plan does not have a generated AI Toolkit handoff folder yet."
+            } else {
+                "This saved plan does not have a generated Wan/Musubi handoff folder."
+            }
+        })?;
 
     let generated_dir = paths.root.join(&relative_path);
     if !generated_dir.exists() {
@@ -450,7 +522,7 @@ fn resolve_training_run(
 
     let mode = request.mode.trim();
     let mode = if mode.is_empty() { "full" } else { mode };
-    let stages = stages_for_mode(mode)?;
+    let stages = stages_for_mode(mode, &backend_id)?;
     for stage in &stages {
         let script_path = generated_dir.join(stage.script_name);
         if !script_path.exists() {
@@ -466,15 +538,73 @@ fn resolve_training_run(
         mode: mode.to_string(),
         generated_dir,
         stages,
+        backend_id,
     })
 }
 
-fn stages_for_mode(mode: &str) -> Result<Vec<RunnerStage>> {
-    if mode == "full" {
-        return Ok(FULL_STAGES.to_vec());
+fn normalize_runner_backend_id(spec: &ProjectSpecForRun) -> String {
+    if training::is_ai_toolkit_wan22_5b_backend(&spec.training_backend_id) {
+        return spec.training_backend_id.clone();
+    }
+    if spec.training_backend_id == "ai_toolkit"
+        && spec.base_model.contains("Wan 2.2 TI2V 5B")
+    {
+        return "ai_toolkit_wan22_ti2v_5b".to_string();
+    }
+    spec.training_backend_id.clone()
+}
+
+fn infer_generated_training_path(paths: &ProjectPaths, project_slug: &str) -> Option<String> {
+    let exact = paths.training_generated.join(project_slug);
+    if exact.is_dir() {
+        return Some(
+            exact
+                .strip_prefix(&paths.root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/"),
+        );
     }
 
-    let stage = FULL_STAGES
+    let prefix = format!("{project_slug}-");
+    let mut candidates = std::fs::read_dir(&paths.training_generated)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name == project_slug || name.starts_with(&prefix))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .unwrap_or(UNIX_EPOCH)
+    });
+    candidates.reverse();
+    candidates
+        .into_iter()
+        .find_map(|path| {
+            path.strip_prefix(&paths.root)
+                .ok()
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        })
+}
+
+fn stages_for_mode(mode: &str, backend_id: &str) -> Result<Vec<RunnerStage>> {
+    let full_stages = if training::is_ai_toolkit_wan22_5b_backend(backend_id) {
+        AI_TOOLKIT_FULL_STAGES
+    } else {
+        FULL_STAGES
+    };
+    if mode == "full" {
+        return Ok(full_stages.to_vec());
+    }
+
+    let stage = full_stages
         .iter()
         .find(|stage| stage.id == mode)
         .cloned()

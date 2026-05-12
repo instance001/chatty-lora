@@ -1,0 +1,21 @@
+{
+  "kind": "webview",
+  "auto_launch": true,
+  "title": "Chatty-lora",
+  "url": "http://127.0.0.1:7879",
+  "notes": "Hosted Chatty-lora dashboard. ChattyCog launches the local server and docks the app UI in-tab.",
+  "build": {
+    "program": "cargo",
+    "args": ["build"],
+    "cwd": "."
+  },
+  "serve": {
+    "program": "cargo",
+    "args": ["run"],
+    "cwd": ".",
+    "env": {
+      "CHATTY_LORA_NO_BROWSER": "1"
+    }
+  },
+  "serve_wait_ms": 2200
+}
