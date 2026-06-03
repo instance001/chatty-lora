@@ -13,7 +13,7 @@ mod types;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     sync::Arc,
     time::Duration,
@@ -33,14 +33,15 @@ use tokio::{fs, process::Command as TokioCommand, sync::RwLock, time::timeout};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::info;
 use types::{
-    BaseModelOption, BuilderDeleteProjectRequest, BuilderPanel, BuilderPrepareRequest,
-    DashboardResponse, DatasetCreateRequest, DatasetPreflightSummary, DatasetSummary,
-    DatasetVideoSummary, FolderSummary, HelperQueryRequest, LibraryItem, LocalDatasetImportRequest,
-    MaterialPanel, ModelFamilySummary, ModelItem, ModelSummary, OpenLocalPathRequest,
-    OpenLocalPathResponse, RuntimeSummary, SearchPreviewRequest, SourceFixApplyPreviewRequest,
-    SourceFixApplyRequest, SourceFixOpenRequest, SourceFixProposalSaveRequest,
-    SourceFixProposeRequest, SourceFixSaveRequest, SourceRegistryUpdateRequest,
-    SystemTelemetrySnapshot, TrainingRunRequest,
+    BaseModelOption, BridgeDatasetImportRequest, BuilderDeleteProjectRequest, BuilderPanel,
+    BuilderPrepareRequest, DashboardResponse, DatasetCreateRequest, DatasetPreflightSummary,
+    DatasetSummary, DatasetVideoSummary, DeleteTrainingOutputsRequest,
+    DeleteTrainingOutputsResponse, FolderSummary, HelperQueryRequest, LibraryItem,
+    LocalDatasetImportRequest, MaterialPanel, ModelFamilySummary, ModelItem, ModelSummary,
+    OpenLocalPathRequest, OpenLocalPathResponse, RuntimeSummary, SearchPreviewRequest,
+    SourceFixApplyPreviewRequest, SourceFixApplyRequest, SourceFixOpenRequest,
+    SourceFixProposalSaveRequest, SourceFixProposeRequest, SourceFixSaveRequest,
+    SourceRegistryUpdateRequest, SystemTelemetrySnapshot, TrainingRunRequest,
 };
 use walkdir::WalkDir;
 
@@ -84,6 +85,8 @@ async fn main() -> Result<()> {
         .route("/api/search/preview", post(preview_search))
         .route("/api/datasets/create", post(create_dataset))
         .route("/api/datasets/import-local", post(import_local_dataset))
+        .route("/api/datasets/import-bridge", post(import_bridge_dataset))
+        .route("/api/training/outputs/delete", post(delete_training_outputs))
         .route("/api/builder/prepare", post(prepare_builder_project))
         .route("/api/builder/delete", post(delete_builder_project))
         .route("/api/training/status", get(get_training_status))
@@ -396,6 +399,20 @@ async fn import_local_dataset(
     }
 }
 
+async fn import_bridge_dataset(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<BridgeDatasetImportRequest>,
+) -> impl IntoResponse {
+    match datasets::import_bridge_dataset(&state.paths, request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn prepare_builder_project(
     State(state): State<Arc<AppState>>,
     Json(request): Json<BuilderPrepareRequest>,
@@ -428,6 +445,40 @@ async fn delete_builder_project(
     }
 
     match builder::delete_project(&state.paths, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_training_outputs(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DeleteTrainingOutputsRequest>,
+) -> impl IntoResponse {
+    let active_status = state.training_runner.status().await;
+    if matches!(active_status.state.as_str(), "running" | "stopping") {
+        if let Some(active_slug) = active_status.project_slug.as_deref() {
+            let active_prefix = format!("outputs/training/{active_slug}/").replace('\\', "/");
+            if request
+                .relative_paths
+                .iter()
+                .any(|path| path.trim().replace('\\', "/").starts_with(&active_prefix))
+            {
+                return (
+                    axum::http::StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "Stop the active training run before deleting its saved LoRA outputs."
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    match delete_training_output_files(&state.paths, request) {
         Ok(response) => Json(response).into_response(),
         Err(error) => (
             axum::http::StatusCode::BAD_REQUEST,
@@ -1422,6 +1473,83 @@ fn classify_model_family(
         "Model files that are not in a known family bucket yet.",
         "models/",
     )
+}
+
+fn delete_training_output_files(
+    paths: &ProjectPaths,
+    request: DeleteTrainingOutputsRequest,
+) -> Result<DeleteTrainingOutputsResponse> {
+    let mut relative_paths = request.relative_paths;
+    relative_paths.sort();
+    relative_paths.dedup();
+    if relative_paths.is_empty() {
+        bail!("Select at least one saved LoRA output to delete.");
+    }
+
+    let outputs_root = paths
+        .training_outputs
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", paths.training_outputs.display()))?;
+    let mut deleted_paths = Vec::new();
+
+    for relative in relative_paths {
+        let rel_path = sanitize_training_output_relative_path(&relative)
+            .ok_or_else(|| anyhow::anyhow!("invalid training output path `{relative}`"))?;
+        let candidate = paths.root.join(&rel_path);
+        let resolved = candidate
+            .canonicalize()
+            .with_context(|| format!("could not resolve {}", candidate.display()))?;
+        if !resolved.starts_with(&outputs_root) {
+            bail!("training output path escapes outputs/training/: {}", relative);
+        }
+        if !resolved.is_file() {
+            bail!("training output file was not found: {}", relative);
+        }
+
+        std::fs::remove_file(&resolved)
+            .with_context(|| format!("could not delete {}", resolved.display()))?;
+        deleted_paths.push(rel_path.display().to_string().replace('\\', "/"));
+    }
+
+    Ok(DeleteTrainingOutputsResponse {
+        deleted_paths: deleted_paths.clone(),
+        notes: vec![format!(
+            "Deleted {} saved training output file{} from outputs/training/.",
+            deleted_paths.len(),
+            if deleted_paths.len() == 1 { "" } else { "s" }
+        )],
+    })
+}
+
+fn sanitize_training_output_relative_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            _ => return None,
+        }
+    }
+    let first = normalized.iter().next()?.to_string_lossy().to_string();
+    if first != "outputs" {
+        return None;
+    }
+    let second = normalized
+        .iter()
+        .nth(1)
+        .map(|part| part.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if second != "training" {
+        return None;
+    }
+    Some(normalized)
 }
 
 fn extension(path: &Path) -> Option<String> {

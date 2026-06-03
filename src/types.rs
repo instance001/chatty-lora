@@ -424,6 +424,24 @@ pub struct LocalDatasetImportRequest {
     pub dataset_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BridgeDatasetImportRequest {
+    pub lane_id: String,
+    pub asset_ids: Vec<String>,
+    pub dataset_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteTrainingOutputsRequest {
+    pub relative_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteTrainingOutputsResponse {
+    pub deleted_paths: Vec<String>,
+    pub notes: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DatasetCreateResponse {
     pub dataset_slug: String,

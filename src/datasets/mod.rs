@@ -12,10 +12,34 @@ use walkdir::WalkDir;
 
 use crate::{
     state::ProjectPaths,
-    types::{DatasetCreateRequest, DatasetCreateResponse, LocalDatasetImportRequest, PreviewItem},
+    types::{
+        BridgeDatasetImportRequest, DatasetCreateRequest, DatasetCreateResponse,
+        LocalDatasetImportRequest, PreviewItem,
+    },
 };
 
 const USER_AGENT: &str = "Chatty-lora/0.1 (+https://github.com/)";
+
+#[derive(Debug, serde::Deserialize)]
+struct BridgeIncomingAssetRecord {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    file_name: String,
+    #[serde(default)]
+    payload_file_name: String,
+}
+
+#[derive(Debug)]
+struct BridgeImportItem {
+    asset_id: String,
+    label: String,
+    summary: String,
+    file_name: String,
+    payload_path: PathBuf,
+}
 
 pub async fn create_dataset(
     client: &Client,
@@ -377,6 +401,184 @@ pub async fn import_local_dataset(
     })
 }
 
+pub async fn import_bridge_dataset(
+    paths: &ProjectPaths,
+    request: BridgeDatasetImportRequest,
+) -> Result<DatasetCreateResponse> {
+    let dataset_name = request.dataset_name.trim();
+    if dataset_name.is_empty() {
+        anyhow::bail!("Give the imported dataset a name first.");
+    }
+    let lane_id = sanitize_lane_component(&request.lane_id);
+    if lane_id.is_empty() {
+        anyhow::bail!("Bridge lane id is required.");
+    }
+
+    let items = collect_bridge_import_items(paths, &lane_id, &request.asset_ids)?;
+    if items.is_empty() {
+        anyhow::bail!("Select at least one bridge asset to import.");
+    }
+
+    fs::create_dir_all(&paths.inputs)
+        .await
+        .with_context(|| format!("could not create {}", paths.inputs.display()))?;
+
+    let dataset_slug = slugify(dataset_name);
+    let dataset_dir = next_available_dataset_dir(&paths.inputs, &dataset_slug).await?;
+    fs::create_dir_all(&dataset_dir)
+        .await
+        .with_context(|| format!("could not create {}", dataset_dir.display()))?;
+
+    let mut notes = Vec::new();
+    let mut manifest_items = Vec::new();
+    let mut saved_items = 0usize;
+    let mut failed_items = 0usize;
+    let mut image_index = 0usize;
+    let mut audio_index = 0usize;
+    let mut video_index = 0usize;
+
+    for item in items {
+        let Some(kind) = local_media_kind(&item.payload_path) else {
+            notes.push(format!("Skipped {} because its file type is not supported yet.", item.file_name));
+            failed_items += 1;
+            continue;
+        };
+
+        let (kind_folder, index) = match kind {
+            "Image" => {
+                image_index += 1;
+                ("images", image_index)
+            }
+            "Audio" => {
+                audio_index += 1;
+                ("audio", audio_index)
+            }
+            "Video" => {
+                video_index += 1;
+                ("video", video_index)
+            }
+            _ => continue,
+        };
+
+        let target_dir = dataset_dir.join(kind_folder);
+        fs::create_dir_all(&target_dir)
+            .await
+            .with_context(|| format!("could not create {}", target_dir.display()))?;
+
+        let title = if item.label.trim().is_empty() {
+            local_file_title(&item.payload_path)
+        } else {
+            clean_caption_text(&item.label)
+        };
+        let extension = extension_from_path(&item.payload_path);
+        let filename = format!(
+            "{}-{:04}-{}.{}",
+            kind.to_ascii_lowercase(),
+            index,
+            truncate_slug(&slugify(&title), 48),
+            extension
+        );
+        let target_path = target_dir.join(filename);
+
+        match fs::copy(&item.payload_path, &target_path).await {
+            Ok(_) => {
+                let caption_path = match write_bridge_caption_sidecar(&target_path, &title, &item.summary).await {
+                    Ok(path) => Some(
+                        path.strip_prefix(&dataset_dir)
+                            .unwrap_or(&path)
+                            .display()
+                            .to_string(),
+                    ),
+                    Err(error) => {
+                        notes.push(format!(
+                            "Copied {}, but could not write its sidecar caption: {}",
+                            item.file_name, error
+                        ));
+                        None
+                    }
+                };
+
+                saved_items += 1;
+                manifest_items.push(ManifestItem {
+                    key: format!("bridge::{}::{}", lane_id, item.asset_id),
+                    title,
+                    source_label: format!("Bridge lane: {}", lane_id),
+                    source_page_url: format!("bridge://{}/{}", lane_id, item.file_name),
+                    media_url: format!("bridge://{}/{}", lane_id, item.file_name),
+                    license: None,
+                    creator: None,
+                    page_number: 0,
+                    kind: kind.to_string(),
+                    saved_path: target_path
+                        .strip_prefix(&dataset_dir)
+                        .unwrap_or(&target_path)
+                        .display()
+                        .to_string(),
+                    caption_path,
+                });
+            }
+            Err(error) => {
+                failed_items += 1;
+                notes.push(format!("Skipped {}: {}", item.file_name, error));
+            }
+        }
+    }
+
+    let manifest = DatasetManifest {
+        dataset_name: dataset_name.to_string(),
+        dataset_slug: dataset_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        created_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        saved_items,
+        failed_items,
+        notes: notes.clone(),
+        items: manifest_items,
+    };
+
+    let manifest_path = dataset_dir.join("metadata.json");
+    let manifest_json =
+        serde_json::to_string_pretty(&manifest).context("could not serialize dataset metadata")?;
+    fs::write(&manifest_path, manifest_json)
+        .await
+        .with_context(|| format!("could not write {}", manifest_path.display()))?;
+
+    if saved_items == 0 {
+        notes.push(
+            "No bridge assets were imported. Check the selected files and try again.".to_string(),
+        );
+    } else {
+        notes.push(format!(
+            "Imported {} bridge asset{} from {} into {}.",
+            saved_items,
+            if saved_items == 1 { "" } else { "s" },
+            lane_id,
+            dataset_dir.display()
+        ));
+        notes.push(
+            "The bridge originals were left alone until ChattyCog marks them consumed.".to_string(),
+        );
+    }
+
+    Ok(DatasetCreateResponse {
+        dataset_slug: dataset_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        dataset_path: dataset_dir.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        saved_items,
+        failed_items,
+        notes,
+    })
+}
+
 fn resolve_input_source_dir(paths: &ProjectPaths, source_folder: &str) -> Result<PathBuf> {
     let trimmed = source_folder.trim();
     if trimmed.is_empty() {
@@ -410,6 +612,78 @@ fn resolve_input_source_dir(paths: &ProjectPaths, source_folder: &str) -> Result
     }
 
     Ok(source_dir)
+}
+
+fn collect_bridge_import_items(
+    paths: &ProjectPaths,
+    lane_id: &str,
+    asset_ids: &[String],
+) -> Result<Vec<BridgeImportItem>> {
+    if asset_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let lane_dir = paths.root.join("bridge").join("incoming_assets").join(lane_id);
+    let root = paths
+        .root
+        .canonicalize()
+        .with_context(|| format!("could not resolve {}", paths.root.display()))?;
+    let lane_dir = lane_dir
+        .canonicalize()
+        .with_context(|| format!("could not resolve {}", lane_dir.display()))?;
+    if !lane_dir.starts_with(&root) {
+        anyhow::bail!("Refusing to import a bridge lane outside the local project root.");
+    }
+
+    let requested = asset_ids
+        .iter()
+        .map(|asset_id| asset_id.trim().to_string())
+        .filter(|asset_id| !asset_id.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    let mut items = Vec::new();
+    for asset_id in requested {
+        let record_path = lane_dir.join(format!("{}.json", asset_id));
+        let record_bytes = std::fs::read(&record_path)
+            .with_context(|| format!("could not read {}", record_path.display()))?;
+        let record: BridgeIncomingAssetRecord = serde_json::from_slice(&record_bytes)
+            .with_context(|| format!("could not parse {}", record_path.display()))?;
+        let payload_path = lane_dir.join(record.payload_file_name.trim());
+        if !payload_path.is_file() {
+            anyhow::bail!("Bridge payload file is missing for asset {}.", asset_id);
+        }
+        items.push(BridgeImportItem {
+            asset_id,
+            label: record.label,
+            summary: record.summary,
+            file_name: if record.file_name.trim().is_empty() {
+                payload_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                record.file_name
+            },
+            payload_path,
+        });
+    }
+
+    Ok(items)
+}
+
+fn sanitize_lane_component(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch.to_ascii_lowercase(),
+            _ => '-',
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn collect_local_media_files(source_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -487,6 +761,23 @@ async fn write_local_caption_sidecar(
             clean_caption_text(title),
             source_label
         ),
+    };
+    fs::write(&caption_path, caption)
+        .await
+        .with_context(|| format!("could not write {}", caption_path.display()))?;
+    Ok(caption_path)
+}
+
+async fn write_bridge_caption_sidecar(
+    target_path: &Path,
+    title: &str,
+    summary: &str,
+) -> Result<PathBuf> {
+    let caption_path = target_path.with_extension("txt");
+    let caption = if !clean_caption_text(summary).is_empty() {
+        clean_caption_text(summary)
+    } else {
+        format!("{}, imported from ChattyCog bridge", clean_caption_text(title))
     };
     fs::write(&caption_path, caption)
         .await

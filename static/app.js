@@ -40,9 +40,21 @@ const state = {
     loading: false,
     messages: [],
   },
+  handoff: {
+    targets: [],
+    sending: false,
+    selectedOutputPaths: new Set(),
+    statusMessage: "",
+  },
   sources: [],
   localImport: {
     importing: false,
+  },
+  bridgeInbox: {
+    loading: false,
+    importing: false,
+    assets: [],
+    selectedAssetIds: new Set(),
   },
   search: {
     query: "",
@@ -106,6 +118,12 @@ const elements = {
   searchMetaPanel: document.getElementById("searchMetaPanel"),
   searchPreviewResults: document.getElementById("searchPreviewResults"),
   materialsSearchInput: document.getElementById("materialsSearchInput"),
+  bridgeInboxPanel: document.getElementById("bridgeInboxPanel"),
+  bridgeInboxStatusNote: document.getElementById("bridgeInboxStatusNote"),
+  bridgeInboxDatasetNameInput: document.getElementById("bridgeInboxDatasetNameInput"),
+  importBridgeInboxButton: document.getElementById("importBridgeInboxButton"),
+  clearBridgeInboxSelectionButton: document.getElementById("clearBridgeInboxSelectionButton"),
+  bridgeInboxList: document.getElementById("bridgeInboxList"),
   localImportSourceSelect: document.getElementById("localImportSourceSelect"),
   localImportDatasetNameInput: document.getElementById("localImportDatasetNameInput"),
   localImportDatasetButton: document.getElementById("localImportDatasetButton"),
@@ -191,6 +209,19 @@ elements.refreshButton.addEventListener("click", () => {
 
 elements.materialsSearchInput.addEventListener("input", () => {
   renderMaterialLists();
+});
+
+elements.bridgeInboxDatasetNameInput.addEventListener("input", () => {
+  renderBridgeInboxPanel();
+});
+
+elements.importBridgeInboxButton.addEventListener("click", () => {
+  void importBridgeInboxAssets();
+});
+
+elements.clearBridgeInboxSelectionButton.addEventListener("click", () => {
+  state.bridgeInbox.selectedAssetIds.clear();
+  renderBridgeInboxPanel();
 });
 
 elements.localImportSourceSelect.addEventListener("change", () => {
@@ -441,10 +472,15 @@ elements.helperInput.addEventListener("keydown", (event) => {
 });
 
 void loadDashboard();
+void loadAvailableHandoffTargets();
+void loadBridgeInbox();
 void loadTrainingStatus();
 startSystemTelemetryPolling();
 syncChattyCogBridgeStatus();
 window.setInterval(syncChattyCogBridgeStatus, 2200);
+window.setInterval(() => {
+  void loadBridgeInbox({ silent: true });
+}, 3000);
 
 async function loadDashboard() {
   setDashboardLoading(true);
@@ -543,6 +579,7 @@ function renderAll() {
   renderSourceRegistry();
   renderSiteFixShell();
   renderMaterialLists();
+  renderBridgeInboxPanel();
   renderLocalImportControls();
   renderSearchMediaButtons();
   renderSearchMeta();
@@ -553,6 +590,27 @@ function renderAll() {
   renderBuilder();
   renderHelper();
   syncChattyCogBridgeStatus();
+}
+
+async function loadAvailableHandoffTargets() {
+  if (!window.chattyCogBridge?.available || typeof window.chattyCogBridge.getAvailableHandoffTargets !== "function") {
+    state.handoff.targets = [];
+    if (state.dashboard) {
+      renderBuilder();
+    }
+    return;
+  }
+
+  try {
+    const payload = await window.chattyCogBridge.getAvailableHandoffTargets();
+    state.handoff.targets = Array.isArray(payload?.targets) ? payload.targets : [];
+  } catch (error) {
+    console.error(error);
+    state.handoff.targets = [];
+  }
+  if (state.dashboard) {
+    renderBuilder();
+  }
 }
 
 function renderPage() {
@@ -887,6 +945,234 @@ function renderMaterialLists() {
 
   renderLibraryList(elements.inputsList, state.dashboard.materials.input_files.filter(filter), "No input files yet. Drop training material into inputs/.");
   renderLibraryList(elements.outputsList, state.dashboard.materials.output_files.filter(filter), "No output files yet. Later exports and curated datasets can appear here.");
+}
+
+async function loadBridgeInbox({ silent = false } = {}) {
+  if (!window.chattyCogBridge?.available || typeof window.chattyCogBridge.readIncomingAssets !== "function") {
+    state.bridgeInbox.assets = [];
+    state.bridgeInbox.selectedAssetIds.clear();
+    renderBridgeInboxPanel();
+    return;
+  }
+
+  if (!silent) {
+    state.bridgeInbox.loading = true;
+    renderBridgeInboxPanel();
+  }
+
+  try {
+    const assets = await window.chattyCogBridge.readIncomingAssets("dataset_candidates");
+    state.bridgeInbox.assets = Array.isArray(assets) ? assets : [];
+    pruneBridgeInboxSelection();
+    seedBridgeInboxDatasetName();
+  } catch (error) {
+    console.error(error);
+    state.bridgeInbox.assets = [];
+    state.bridgeInbox.selectedAssetIds.clear();
+  } finally {
+    state.bridgeInbox.loading = false;
+    renderBridgeInboxPanel();
+  }
+}
+
+function renderBridgeInboxPanel() {
+  const hasBridge = Boolean(window.chattyCogBridge?.available);
+  elements.bridgeInboxPanel.classList.toggle("hidden", !hasBridge);
+  if (!hasBridge) {
+    return;
+  }
+
+  const assets = state.bridgeInbox.assets || [];
+  const selectedCount = state.bridgeInbox.selectedAssetIds.size;
+  const datasetName = elements.bridgeInboxDatasetNameInput.value.trim();
+
+  if (state.bridgeInbox.loading) {
+    elements.bridgeInboxStatusNote.textContent = "Checking ChattyCog for new dataset candidate handoffs...";
+  } else if (!assets.length) {
+    elements.bridgeInboxStatusNote.textContent = "No dataset candidate handoffs are waiting right now.";
+  } else {
+    elements.bridgeInboxStatusNote.textContent = `${assets.length} handoff item${assets.length === 1 ? "" : "s"} waiting in the dataset candidate lane. Select what you want to import into a clean local dataset.`;
+  }
+
+  elements.importBridgeInboxButton.disabled =
+    state.bridgeInbox.importing || !selectedCount || !datasetName;
+  elements.importBridgeInboxButton.textContent = state.bridgeInbox.importing
+    ? "Importing..."
+    : `Import selected into dataset${selectedCount ? ` (${selectedCount})` : ""}`;
+  elements.clearBridgeInboxSelectionButton.disabled =
+    state.bridgeInbox.importing || selectedCount === 0;
+
+  if (!assets.length) {
+    elements.bridgeInboxList.innerHTML = `<div class="empty-state compact">No bridge inbox items yet.</div>`;
+    return;
+  }
+
+  elements.bridgeInboxList.innerHTML = assets
+    .map((asset) => {
+      const selected = state.bridgeInbox.selectedAssetIds.has(asset.asset_id);
+      return `
+        <article class="bridge-inbox-item ${selected ? "selected" : ""}">
+          <label class="bridge-inbox-select">
+            <input type="checkbox" data-bridge-asset-id="${escapeAttribute(asset.asset_id)}" ${selected ? "checked" : ""}>
+            <span>${escapeHtml(asset.label || asset.file_name || asset.asset_id || "Bridge asset")}</span>
+          </label>
+          <div class="bridge-inbox-thumb">
+            ${renderBridgeInboxPreview(asset)}
+          </div>
+          <div class="bridge-inbox-copy">
+            <strong>${escapeHtml(asset.file_name || asset.payload_file_name || asset.asset_id)}</strong>
+            <p>${escapeHtml(asset.summary || `Inbox lane ${asset.lane_id || "dataset_candidates"}`)}</p>
+            <div class="bridge-inbox-meta">${renderBridgeInboxMeta(asset)}</div>
+            <p class="bridge-inbox-action-note">Import will copy this into a clean local dataset under <code>inputs/</code>. The source module keeps its original file.</p>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  for (const checkbox of elements.bridgeInboxList.querySelectorAll("[data-bridge-asset-id]")) {
+    checkbox.addEventListener("change", () => {
+      const assetId = checkbox.dataset.bridgeAssetId;
+      if (!assetId) {
+        return;
+      }
+      if (checkbox.checked) {
+        state.bridgeInbox.selectedAssetIds.add(assetId);
+      } else {
+        state.bridgeInbox.selectedAssetIds.delete(assetId);
+      }
+      seedBridgeInboxDatasetName();
+      renderBridgeInboxPanel();
+    });
+  }
+}
+
+function renderBridgeInboxMeta(asset) {
+  const chips = [];
+  const sender = String(asset.from_device_name || asset.from_device_id || "").trim();
+  const laneLabel = String(asset.lane_label || asset.lane_id || "dataset_candidates").trim();
+  const delivered = formatBridgeDeliveredTime(asset.delivered_at_unix_ms);
+  const byteLabel = Number.isFinite(Number(asset.byte_len)) && Number(asset.byte_len) > 0
+    ? formatBytes(Number(asset.byte_len))
+    : "";
+  const contentType = String(asset.content_type || "").trim();
+
+  if (sender) {
+    chips.push(`From ${sender}`);
+  }
+  if (laneLabel) {
+    chips.push(`Lane ${laneLabel}`);
+  }
+  if (delivered) {
+    chips.push(`Delivered ${delivered}`);
+  }
+  if (byteLabel) {
+    chips.push(byteLabel);
+  }
+  if (contentType) {
+    chips.push(contentType);
+  }
+
+  return chips.length
+    ? chips.map((chip) => `<span class="list-badge">${escapeHtml(chip)}</span>`).join("")
+    : `<span class="list-badge">Bridge handoff</span>`;
+}
+
+function renderBridgeInboxPreview(asset) {
+  const url =
+    typeof window.chattyCogBridge?.incomingAssetUrl === "function"
+      ? window.chattyCogBridge.incomingAssetUrl(asset.lane_id || "dataset_candidates", asset.payload_file_name)
+      : "";
+  const contentType = String(asset.content_type || "").toLowerCase();
+  const fileName = String(asset.file_name || asset.payload_file_name || "").toLowerCase();
+
+  if (contentType.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/.test(fileName)) {
+    return `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(asset.label || asset.file_name || "Bridge asset")}">`;
+  }
+  if (contentType.startsWith("video/") || /\.(mp4|avi|mov|mkv|webm)$/.test(fileName)) {
+    return `<video controls src="${escapeAttribute(url)}"></video>`;
+  }
+  if (contentType.startsWith("audio/") || /\.(wav|mp3|flac|ogg|m4a)$/.test(fileName)) {
+    return `<audio controls src="${escapeAttribute(url)}"></audio>`;
+  }
+  return `<div class="preview-fallback">Bridge Asset</div>`;
+}
+
+function pruneBridgeInboxSelection() {
+  const validIds = new Set((state.bridgeInbox.assets || []).map((asset) => asset.asset_id));
+  for (const assetId of Array.from(state.bridgeInbox.selectedAssetIds)) {
+    if (!validIds.has(assetId)) {
+      state.bridgeInbox.selectedAssetIds.delete(assetId);
+    }
+  }
+}
+
+function seedBridgeInboxDatasetName() {
+  if (elements.bridgeInboxDatasetNameInput.value.trim()) {
+    return;
+  }
+  const selectedAsset = (state.bridgeInbox.assets || []).find((asset) =>
+    state.bridgeInbox.selectedAssetIds.has(asset.asset_id),
+  );
+  if (!selectedAsset) {
+    return;
+  }
+  const seed = selectedAsset.label || selectedAsset.file_name || selectedAsset.asset_id || "bridge-import";
+  elements.bridgeInboxDatasetNameInput.value = `${slugify(seed)}-dataset`;
+}
+
+async function importBridgeInboxAssets() {
+  const selectedAssetIds = Array.from(state.bridgeInbox.selectedAssetIds);
+  const datasetName = elements.bridgeInboxDatasetNameInput.value.trim();
+  if (!selectedAssetIds.length) {
+    elements.bridgeInboxStatusNote.textContent = "Select at least one bridge inbox item first.";
+    return;
+  }
+  if (!datasetName) {
+    elements.bridgeInboxStatusNote.textContent = "Give the imported dataset a name first.";
+    return;
+  }
+
+  state.bridgeInbox.importing = true;
+  renderBridgeInboxPanel();
+  elements.bridgeInboxStatusNote.textContent = `Importing ${selectedAssetIds.length} bridge asset${selectedAssetIds.length === 1 ? "" : "s"} into a clean dataset...`;
+
+  try {
+    const response = await fetch("/api/datasets/import-bridge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lane_id: "dataset_candidates",
+        asset_ids: selectedAssetIds,
+        dataset_name: datasetName,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `Bridge import failed with ${response.status}`);
+    }
+
+    if (typeof window.chattyCogBridge?.consumeIncomingAsset === "function") {
+      for (const assetId of selectedAssetIds) {
+        window.chattyCogBridge.consumeIncomingAsset("dataset_candidates", assetId);
+      }
+    }
+
+    state.bridgeInbox.selectedAssetIds.clear();
+    elements.bridgeInboxDatasetNameInput.value = "";
+    elements.bridgeInboxStatusNote.textContent = Array.isArray(payload.notes) ? payload.notes.join(" ") : "Bridge import complete.";
+    state.builder.selectedDatasetSlug = payload.dataset_slug;
+    await loadDashboard();
+    await loadBridgeInbox({ silent: true });
+    state.page = "builder";
+    renderPage();
+  } catch (error) {
+    console.error(error);
+    elements.bridgeInboxStatusNote.textContent = `Could not import bridge inbox items yet: ${String(error.message || error)}`;
+  } finally {
+    state.bridgeInbox.importing = false;
+    renderBridgeInboxPanel();
+  }
 }
 
 function renderLocalImportControls() {
@@ -2669,6 +2955,36 @@ function renderPreparedProjects(projects) {
     });
   }
 
+  for (const checkbox of elements.preparedProjectsList.querySelectorAll("[data-select-training-output]")) {
+    checkbox.addEventListener("change", () => {
+      const relativePath = checkbox.dataset.selectTrainingOutput || "";
+      if (!relativePath) {
+        return;
+      }
+      if (checkbox.checked) {
+        state.handoff.selectedOutputPaths.add(relativePath);
+      } else {
+        state.handoff.selectedOutputPaths.delete(relativePath);
+      }
+      state.handoff.statusMessage = "";
+      renderBuilder();
+    });
+  }
+
+  for (const button of elements.preparedProjectsList.querySelectorAll("[data-send-project-loras]")) {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.sendProjectLoras || "";
+      void sendProjectLorasToChattyArt(slug);
+    });
+  }
+
+  for (const button of elements.preparedProjectsList.querySelectorAll("[data-delete-training-outputs]")) {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.deleteTrainingOutputs || "";
+      void deleteSelectedTrainingOutputs(slug);
+    });
+  }
+
   for (const button of elements.preparedProjectsList.querySelectorAll("[data-stop-training]")) {
     button.addEventListener("click", () => {
       void stopTrainingRun();
@@ -2676,6 +2992,179 @@ function renderPreparedProjects(projects) {
   }
 
   renderSystemTelemetry();
+}
+
+function getChattyArtHandoffTarget() {
+  return state.handoff.targets.find((target) => target.target_id === "chatty_art") || null;
+}
+
+async function sendProjectLorasToChattyArt(projectSlug) {
+  const project = getPreparedProject(projectSlug);
+  const target = getChattyArtHandoffTarget();
+  if (!project || !target?.supported) {
+    return;
+  }
+
+  const outputs = Array.isArray(project.trained_outputs) ? project.trained_outputs : [];
+  const selectedOutputs = outputs.filter((output) => state.handoff.selectedOutputPaths.has(output.relative_path));
+  if (!selectedOutputs.length) {
+    state.handoff.statusMessage = "Select at least one saved LoRA output first.";
+    renderBuilder();
+    return;
+  }
+
+  if (!window.chattyCogBridge?.available || typeof window.chattyCogBridge.requestHandoff !== "function") {
+    state.handoff.statusMessage = "ChattyCog handoff bridge is unavailable right now.";
+    renderBuilder();
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Send ${selectedOutputs.length} selected LoRA output${selectedOutputs.length === 1 ? "" : "s"} to Chatty-art? This will copy them and keep the originals in Chatty-lora.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const payload = {
+    source_module_id: "chatty_lora",
+    destination: {
+      kind: "module",
+      target_id: "chatty_art",
+      lane_id: "lora_imports",
+    },
+    artifacts: selectedOutputs.map((output) => ({
+      artifact_id: output.relative_path,
+      label: output.relative_path.split("/").pop() || output.relative_path,
+      artifact_kind: "module_asset_file",
+      media_kind: "lora",
+      source_relative_path: output.relative_path,
+      summary: buildLoraHandoffSummary(project, output),
+      tags: buildLoraHandoffTags(project),
+    })),
+    user_note: `Saved LoRA output from project ${project.project_name}.`,
+  };
+
+  state.handoff.sending = true;
+  state.handoff.statusMessage = "";
+  renderBuilder();
+
+  try {
+    const accepted = window.chattyCogBridge.requestHandoff(payload);
+    if (!accepted) {
+      throw new Error("ChattyCog did not accept the handoff request.");
+    }
+    state.handoff.selectedOutputPaths.clear();
+    state.handoff.statusMessage = `Sent ${selectedOutputs.length} LoRA output${selectedOutputs.length === 1 ? "" : "s"} to Chatty-art.`;
+  } catch (error) {
+    state.handoff.statusMessage = String(error?.message || error);
+  } finally {
+    state.handoff.sending = false;
+    renderBuilder();
+  }
+}
+
+async function deleteSelectedTrainingOutputs(projectSlug) {
+  const project = getPreparedProject(projectSlug);
+  if (!project) {
+    return;
+  }
+
+  const outputs = Array.isArray(project.trained_outputs) ? project.trained_outputs : [];
+  const selectedOutputs = outputs.filter((output) => state.handoff.selectedOutputPaths.has(output.relative_path));
+  if (!selectedOutputs.length) {
+    state.handoff.statusMessage = "Select at least one saved LoRA output first.";
+    renderBuilder();
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Delete ${selectedOutputs.length} selected LoRA output${selectedOutputs.length === 1 ? "" : "s"} from Chatty-lora? This removes the saved files from outputs/training for this project.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  state.handoff.sending = true;
+  state.handoff.statusMessage = "";
+  renderBuilder();
+
+  try {
+    const response = await fetch("/api/training/outputs/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        relative_paths: selectedOutputs.map((output) => output.relative_path),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `Delete failed with ${response.status}`);
+    }
+    state.handoff.selectedOutputPaths.clear();
+    state.handoff.statusMessage = Array.isArray(payload.notes) ? payload.notes.join(" ") : "Selected LoRA outputs deleted.";
+    await loadDashboard();
+  } catch (error) {
+    state.handoff.statusMessage = String(error?.message || error);
+  } finally {
+    state.handoff.sending = false;
+    renderBuilder();
+  }
+}
+
+function buildLoraHandoffSummary(project, output) {
+  const parts = [
+    project.project_name ? `Project: ${project.project_name}` : "",
+    project.base_model ? `Base model: ${project.base_model}` : "",
+    project.concept_type ? `Concept: ${project.concept_type}` : "",
+    output.relative_path ? `Output: ${output.relative_path}` : "",
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
+function buildLoraHandoffTags(project) {
+  const tags = ["chatty-lora", "lora", "trained-output"];
+  if (project.training_backend_id) {
+    tags.push(project.training_backend_id);
+  }
+  if (project.base_model) {
+    const lower = String(project.base_model).toLowerCase();
+    if (lower.includes("wan")) tags.push("family:wan");
+    if (lower.includes("flux")) tags.push("family:flux");
+    if (lower.includes("sd3")) tags.push("family:sd3");
+    if (lower.includes("qwen")) tags.push("family:qwen");
+    if (lower.includes("stable diffusion")) tags.push("family:sd");
+  }
+  return [...new Set(tags)];
+}
+
+function buildLoraHandoffPreview(project, selectedOutputs, target) {
+  if (!selectedOutputs.length) {
+    return `<div class="empty-state compact">Select one or more saved LoRA outputs to preview the mediated handoff details.</div>`;
+  }
+
+  const first = selectedOutputs[0];
+  const tags = buildLoraHandoffTags(project).slice(0, 6);
+  const targetLine = target?.supported
+    ? `${target.label} via lora_imports`
+    : "No approved Chatty-art LoRA import route is available right now.";
+
+  return `
+    <div class="handoff-manifest">
+      <strong>${escapeHtml(`${selectedOutputs.length} LoRA output${selectedOutputs.length === 1 ? "" : "s"} queued for mediated copy handoff`)}</strong>
+      <p>ChattyCog will keep the originals in Chatty-lora, attach project context, and route copies only into Chatty-art's approved <code>lora_imports</code> lane.</p>
+      <div class="handoff-manifest-meta">
+        <span class="list-badge">Source chatty_lora</span>
+        <span class="list-badge">${escapeHtml(`${selectedOutputs.length} file${selectedOutputs.length === 1 ? "" : "s"}`)}</span>
+        ${project.base_model ? `<span class="list-badge">${escapeHtml(project.base_model)}</span>` : ""}
+        ${project.training_backend_id ? `<span class="list-badge">${escapeHtml(project.training_backend_id)}</span>` : ""}
+      </div>
+      <p>${escapeHtml(`First item summary: ${buildLoraHandoffSummary(project, first)}`)}</p>
+      ${tags.length ? `<div class="handoff-manifest-meta">${tags.map((tag) => `<span class="list-badge">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+      <p>${escapeHtml(`Available route: ${targetLine}`)}</p>
+      <p>${escapeHtml(`User note that will travel with the handoff: Saved LoRA output from project ${project.project_name}.`)}</p>
+    </div>
+  `;
 }
 
 function orderPreparedProjects(projects) {
@@ -2924,15 +3413,41 @@ function renderSavedTrainingOutputs(project) {
     return "";
   }
 
+  const chattyArtTarget = getChattyArtHandoffTarget();
+  const selectedCount = outputs.filter((output) => state.handoff.selectedOutputPaths.has(output.relative_path)).length;
+  const selectedOutputs = outputs.filter((output) => state.handoff.selectedOutputPaths.has(output.relative_path));
+
   return `
     <div class="training-output-list saved-output-list">
       <div>
         <strong>Saved LoRA output${outputs.length === 1 ? "" : "s"}</strong>
         <p class="muted-copy">Auto-saved for this plan. No separate save button is needed; running this same saved plan again may replace the same LoRA filename.</p>
       </div>
+      <div class="inline-actions compact">
+        ${window.chattyCogBridge?.available ? `
+          <button
+            class="secondary-button"
+            type="button"
+            data-send-project-loras="${escapeAttribute(project.slug)}"
+            ${!chattyArtTarget?.supported || selectedCount === 0 || state.handoff.sending ? "disabled" : ""}
+          >${escapeHtml(state.handoff.sending ? "Sending..." : `Send selected to Chatty-art${selectedCount ? ` (${selectedCount})` : ""}`)}</button>
+        ` : ""}
+        <button
+          class="secondary-button danger-button"
+          type="button"
+          data-delete-training-outputs="${escapeAttribute(project.slug)}"
+          ${selectedCount === 0 || state.handoff.sending ? "disabled" : ""}
+        >${escapeHtml(state.handoff.sending ? "Working..." : `Delete selected${selectedCount ? ` (${selectedCount})` : ""}`)}</button>
+        ${state.handoff.statusMessage ? `<span class="inline-note">${escapeHtml(state.handoff.statusMessage)}</span>` : ""}
+      </div>
+      ${window.chattyCogBridge?.available ? buildLoraHandoffPreview(project, selectedOutputs, chattyArtTarget) : ""}
       ${outputs.map((output) => `
         <article class="training-output-row">
           <div>
+            <label class="preview-select">
+              <input type="checkbox" data-select-training-output="${escapeAttribute(output.relative_path)}" ${state.handoff.selectedOutputPaths.has(output.relative_path) ? "checked" : ""}>
+              <span>${window.chattyCogBridge?.available ? "Select for handoff or delete" : "Select for delete"}</span>
+            </label>
             <code>${escapeHtml(output.relative_path)}</code>
             <div class="source-meta">
               <span class="list-badge">${escapeHtml(formatBytes(output.bytes))}</span>
@@ -3881,6 +4396,14 @@ function formatBytes(bytes) {
     unitIndex += 1;
   }
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatBridgeDeliveredTime(unixMs) {
+  const value = Number(unixMs);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+  return formatUnixSeconds(value / 1000);
 }
 
 function formatUnixSeconds(value) {

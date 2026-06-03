@@ -2,13 +2,20 @@
 Sister repo to Chatty-art - local media generation tool found at:
 https://github.com/instance001/chatty-art
 
+Standalone local LoRA builder, and ChattyCog-compatible module drop-in.
+
+(Drop me in ChattyCog's `modules/` folder!)
+
 Chatty-lora is a local LoRA builder dashboard for:
 - respectful training-material search
 - dataset curation
 - training plan preparation
 - source-specific crawl adapter review and repair
+- hosted dataset-candidate intake from Chatty-art through ChattyCog's bridge lanes
+- hosted LoRA return handoff back to Chatty-art after training
+- explicit local cleanup of selected saved training outputs
 
-It is a standalone sister tool to Chatty-art, but it is not wired into Chatty-art. The copy of `chatty-art/` sitting beside it is reference material only.
+It remains a standalone sister tool to Chatty-art, but when both are hosted inside ChattyCog they can now exchange approved copy-only artifacts through mediated bridge lanes instead of sharing internal state directly.
 
 ## What It Does Today
 
@@ -30,6 +37,8 @@ Chatty-lora currently focuses on the front half of the LoRA workflow:
   - generate Wan 2.1 / Musubi Tuner handoff files into `config/training/generated/`
   - surface a Wan preflight card for model files, WSL, and trainer readiness
   - explain when a backend was auto-suggested versus manually overridden
+  - send selected trained LoRA outputs back to Chatty-art through ChattyCog
+  - delete selected saved LoRA outputs from the same checkbox surface when you are cleaning up disk usage
 
 - `Helper Chat`
   - page-aware local guidance for both `Materials` and `Builder`

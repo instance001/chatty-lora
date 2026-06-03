@@ -1,0 +1,36 @@
+{
+  "features": [
+    "shared_state_publish",
+    "shared_state_receive"
+  ],
+  "asset_lanes": [
+    {
+      "lane_id": "dataset_candidates",
+      "label": "Dataset Candidates",
+      "direction": "incoming",
+      "delivery_mode": "bridge_inbox",
+      "artifact_kinds": ["module_asset_file"],
+      "accepted_content_types": [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "video/mp4",
+        "video/x-msvideo",
+        "image/gif",
+        "audio/wav",
+        "audio/mpeg",
+        "audio/flac",
+        "application/octet-stream"
+      ],
+      "max_bytes": 536870912,
+      "replayable": true,
+      "notes": [
+        "Chatty-lora can accept reviewed media copies as candidate dataset inputs through the bridge inbox."
+      ]
+    }
+  ],
+  "notes": [
+    "This module can receive approved dataset candidate files from sibling modules through ChattyCog mediation."
+  ]
+}

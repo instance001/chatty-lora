@@ -264,6 +264,29 @@
                 />
               </label>
 
+              <div class="note-panel bridge-inbox-panel hidden" id="bridgeInboxPanel">
+                <p class="summary-title">Bridge inbox</p>
+                <h3>Dataset candidates from ChattyCog</h3>
+                <p class="muted-copy" id="bridgeInboxStatusNote">
+                  Hosted bridge assets will appear here when ChattyCog sends reviewed material into this lane.
+                </p>
+                <label class="field-block compact">
+                  <span class="field-title">Imported dataset name</span>
+                  <input
+                    id="bridgeInboxDatasetNameInput"
+                    type="text"
+                    placeholder="e.g. chatty-art-kookaburra-pass"
+                  />
+                </label>
+                <div class="inline-actions">
+                  <button class="primary-button" id="importBridgeInboxButton">Import selected into dataset</button>
+                  <button class="secondary-button" id="clearBridgeInboxSelectionButton">Clear selection</button>
+                </div>
+                <div class="bridge-inbox-list" id="bridgeInboxList">
+                  <div class="empty-state compact">No bridge inbox items yet.</div>
+                </div>
+              </div>
+
               <div class="note-panel local-import-panel">
                 <p class="summary-title">Local folder cleanup</p>
                 <h3>Turn a jumble folder into a clean dataset</h3>

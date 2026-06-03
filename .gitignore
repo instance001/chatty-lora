@@ -76,6 +76,12 @@ outputs/*
 outputs/training/*
 !outputs/training/.gitkeep
 !outputs/training/README.md
+/bridge/*
+!/bridge/incoming_assets/
+/bridge/incoming_assets/*
+!/bridge/incoming_assets/dataset_candidates/
+/bridge/incoming_assets/dataset_candidates/*
+!/bridge/incoming_assets/dataset_candidates/.gitkeep
 runtime/*
 !runtime/.gitkeep
 !runtime/README.md

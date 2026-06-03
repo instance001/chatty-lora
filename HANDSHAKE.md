@@ -25,6 +25,7 @@ Chatty-lora is the local LoRA-building department. It handles respectful materia
 - Generated trainer handoff files under `config/training/generated/`
 - Training logs and outputs under `outputs/training/`
 - Source-fix notes, proposals, previews, and apply history under `config/source-fixes/`
+- Optional mediated artifact handoffs to sibling modules when the user explicitly selects bridge inbox items or trained outputs and confirms the action
 
 ## Operating rules / preferences
 
@@ -52,3 +53,13 @@ Chatty-lora is the local LoRA-building department. It handles respectful materia
 ## Portable bridge note
 
 This module is being hosted inside ChattyCog as a docked web dashboard. The hosted UI remains Chatty-lora's own app; ChattyCog should treat the bridge as optional handoff telemetry rather than as the module's primary state store.
+
+Current hosted bridge lanes / surfaces:
+- incoming artifact inbox:
+  - `dataset_candidates`
+- outgoing artifact handoff requests:
+  - `lora_imports` toward `chatty_art`
+
+Important boundary:
+- Chatty-lora still owns its real datasets, plans, and training outputs
+- ChattyCog only mediates approved copy-only handoffs and lightweight bridge summaries

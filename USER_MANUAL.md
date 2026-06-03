@@ -4,6 +4,10 @@ This manual assumes **zero prior knowledge**.
 
 If you have never built a LoRA before, never used a crawler before, and are not a coder, this is for you.
 
+Chatty-lora is a standalone local tool first, but it is also ChattyCog-compatible.
+
+(Drop me in ChattyCog's `modules/` folder!)
+
 ## What Chatty-lora Is
 
 Chatty-lora is a local helper for making LoRA training less miserable.
@@ -62,6 +66,36 @@ The most important ones are:
 - `inputs/` for curated datasets
 - `models/` for base model files
 - `config/training/generated/` for generated Musubi handoff files
+
+## Hosted handoffs and local cleanup
+
+If Chatty-lora is running inside ChattyCog as a hosted module, two extra workflow surfaces can appear.
+
+### Dataset candidate inbox on Materials
+
+Chatty-art can send generated outputs into Chatty-lora's approved `dataset_candidates` lane.
+
+When that happens, the hosted `Materials` page can show a bridge inbox panel:
+- preview the incoming image, video, or audio file
+- select which bridge items you actually want
+- name the destination dataset
+- import the selected files into a clean local dataset under `inputs/`
+
+Important behavior:
+- import is copy-only
+- the original file stays in the sending module
+- Chatty-lora only adopts the file into its real dataset after you explicitly import it
+
+### Saved LoRA output actions on Builder
+
+If ChattyCog also detects `Chatty-art`, the saved LoRA output list can become a mediated handoff surface:
+- select one or more saved `.safetensors` outputs
+- `Send selected to Chatty-art`
+- review the handoff preview/metadata summary
+- or use `Delete selected` for local cleanup
+
+`Delete selected` removes only the chosen output files from `outputs/training/`.
+It does not remove the saved plan card itself, and it does not reach into any sibling module.
 
 ## Page 1: Materials
 
@@ -705,7 +739,7 @@ outputs/training/<plan-slug>/loras/
 
 There is no extra save button. If you run the same saved plan again, it may replace the same `.safetensors` filename. The saved output row can copy the path or ask Windows Explorer to open/select the file.
 
-Deleting a saved training plan does not delete those trained LoRA outputs. It only removes the saved plan JSON and generated handoff files. If you want to reclaim disk space from old trained outputs, delete the matching folder under `outputs/training/` manually after you are sure you do not need it.
+Deleting a saved training plan does not delete those trained LoRA outputs. It only removes the saved plan JSON and generated handoff files. If you want to reclaim disk space from old trained outputs, you can now use `Delete selected` from the saved output list or remove the matching folder under `outputs/training/` manually after you are sure you do not need it.
 
 The manual commands are still useful when:
 - you want to debug directly in WSL
