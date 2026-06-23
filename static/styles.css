@@ -29,9 +29,68 @@ body {
   color: var(--ink);
 }
 
+body.splash-active {
+  overflow: hidden;
+}
+
 .shell {
   width: min(1440px, calc(100vw - 48px));
   margin: 28px auto 40px;
+}
+
+.startup-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, rgba(15, 108, 116, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(8, 13, 17, 0.96), rgba(10, 15, 20, 0.98));
+  transition: opacity 220ms ease, visibility 220ms ease;
+}
+
+.startup-splash.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.startup-splash-card {
+  width: min(760px, calc(100vw - 48px));
+  padding: 28px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(19, 24, 29, 0.92);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.startup-splash-logo {
+  display: block;
+  width: min(100%, 520px);
+  margin: 0 auto 18px;
+}
+
+.startup-splash-title {
+  margin: 0;
+  color: #f5f3ec;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  font-weight: 700;
+}
+
+.startup-splash-copy,
+.startup-splash-note {
+  margin: 14px auto 0;
+  max-width: 58ch;
+  color: rgba(235, 239, 236, 0.82);
+  line-height: 1.6;
+}
+
+.startup-splash-note {
+  color: rgba(235, 239, 236, 0.62);
+  font-size: 0.92rem;
 }
 
 .workspace {
@@ -209,6 +268,32 @@ h1 {
   position: sticky;
   top: 22px;
   overflow: hidden;
+}
+
+.fmi-about-panel {
+  margin-top: 18px;
+  border: 1px solid rgba(15, 108, 116, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 248, 239, 0.76);
+  padding: 14px 16px;
+}
+
+.fmi-about-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.fmi-about-copy {
+  margin-top: 12px;
+  color: var(--muted);
+  display: grid;
+  gap: 10px;
+}
+
+.fmi-about-copy p {
+  margin: 0;
+  line-height: 1.55;
 }
 
 .card-header,

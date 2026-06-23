@@ -1,4 +1,5 @@
 const MAX_EXPLORATORY_BATCH_INDEX = 9;
+const STARTUP_SPLASH_DURATION_MS = 3000;
 
 const state = {
   page: "materials",
@@ -70,6 +71,8 @@ const state = {
 };
 
 let lastBridgeStatusFingerprint = "";
+let startupSplashDismissed = false;
+let startupSplashTimerHandle = null;
 
 const SYSTEM_TELEMETRY_WIDTH = 220;
 const SYSTEM_TELEMETRY_HEIGHT = 54;
@@ -193,7 +196,39 @@ const elements = {
   helperQuickActions: document.getElementById("helperQuickActions"),
   helperInput: document.getElementById("helperInput"),
   helperSendButton: document.getElementById("helperSendButton"),
+  startupSplash: document.getElementById("startupSplash"),
 };
+
+function dismissStartupSplash() {
+  if (startupSplashDismissed || !elements.startupSplash) {
+    return;
+  }
+  startupSplashDismissed = true;
+  if (startupSplashTimerHandle) {
+    window.clearTimeout(startupSplashTimerHandle);
+    startupSplashTimerHandle = null;
+  }
+  elements.startupSplash.classList.add("hidden");
+  document.body.classList.remove("splash-active");
+  window.removeEventListener("keydown", handleStartupSplashKeydown);
+}
+
+function handleStartupSplashKeydown(event) {
+  if (event.key === " " || event.key === "Enter" || event.key === "Escape") {
+    event.preventDefault();
+    dismissStartupSplash();
+  }
+}
+
+function initStartupSplash() {
+  if (!elements.startupSplash) {
+    return;
+  }
+  document.body.classList.add("splash-active");
+  elements.startupSplash.addEventListener("click", dismissStartupSplash);
+  window.addEventListener("keydown", handleStartupSplashKeydown);
+  startupSplashTimerHandle = window.setTimeout(dismissStartupSplash, STARTUP_SPLASH_DURATION_MS);
+}
 
 for (const button of elements.pageButtons) {
   button.addEventListener("click", () => {
@@ -1744,6 +1779,8 @@ function rankedTrainingBackends(backends) {
     return left.name.localeCompare(right.name);
   });
 }
+
+initStartupSplash();
 
 function baseModelVariantHint(baseModelOption) {
   const haystack = `${baseModelOption?.label || ""} ${baseModelOption?.value || ""}`.toLowerCase();
