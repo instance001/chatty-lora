@@ -541,6 +541,7 @@ For day-to-day use:
 - keep search terms specific
 - curate in smaller batches first
 - prepare the dataset shell before thinking about training
+- Glossary terms: [GLOSSARY.md](GLOSSARY.md)
 
 ## License
 
