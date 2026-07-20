@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 pub struct DashboardResponse {
@@ -6,6 +7,7 @@ pub struct DashboardResponse {
     pub project_root: String,
     pub materials: MaterialPanel,
     pub builder: BuilderPanel,
+    pub helper: HelperPanel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,6 +29,17 @@ pub struct HelperQueryRequest {
     pub question: String,
     pub materials: Option<MaterialsHelperContext>,
     pub builder: Option<BuilderHelperContext>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HelperLaneUpdateRequest {
+    pub selected_lane_id: String,
+    pub lanes: Vec<HelperLaneEntryInput>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HelperLaneVerifyRequest {
+    pub lane: HelperLaneEntryInput,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +85,97 @@ pub struct HelperQueryResponse {
     pub answer: String,
     pub context_title: String,
     pub suggestions: Vec<String>,
+    pub lane_id: String,
+    pub lane_label: String,
+    pub lane_mode: String,
+    pub lane_status_note: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HelperPanel {
+    pub lane_registry: HelperLaneRegistryPayload,
+    pub provider_catalog: HelperProviderCatalogPayload,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HelperLaneRegistryPayload {
+    pub selected_lane_id: String,
+    pub selected_lane_label: String,
+    pub selected_lane_mode: String,
+    pub supports_remote_inference: bool,
+    pub notes: Vec<String>,
+    pub lanes: Vec<HelperLaneSummary>,
+    pub recent_activity: Vec<HelperLaneActivityItem>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct HelperLaneActivityItem {
+    pub unix_seconds: u64,
+    pub lane_id: Option<String>,
+    pub lane_label: String,
+    pub action: String,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct HelperLaneSummary {
+    pub id: String,
+    pub label: String,
+    pub lane_mode: String,
+    pub provider_kind: String,
+    pub model_name: String,
+    pub base_url: Option<String>,
+    pub metadata: Option<Value>,
+    pub enabled: bool,
+    pub supports_remote_inference: bool,
+    pub has_api_key: bool,
+    pub verification_status: String,
+    pub verification_note: String,
+    pub last_verified_unix_seconds: Option<u64>,
+    pub source: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HelperLaneVerifyResponse {
+    pub lane_id: String,
+    pub lane_label: String,
+    pub verification_status: String,
+    pub verification_note: String,
+    pub last_verified_unix_seconds: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct HelperProviderCatalogPayload {
+    pub providers: Vec<HelperProviderCatalogEntry>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct HelperProviderCatalogEntry {
+    pub kind: String,
+    pub label: String,
+    pub live_helper_supported: bool,
+    pub base_url_mode: String,
+    pub api_key_mode: String,
+    pub default_base_url: Option<String>,
+    pub example_model: Option<String>,
+    pub model_placeholder: String,
+    pub base_url_placeholder: String,
+    pub setup_note: String,
+    pub draft_verification_note: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HelperLaneEntryInput {
+    pub id: String,
+    pub label: String,
+    pub lane_mode: String,
+    pub provider_kind: String,
+    pub model_name: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Serialize)]

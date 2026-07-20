@@ -40,6 +40,14 @@ const state = {
   helper: {
     loading: false,
     messages: [],
+    editingLaneId: "",
+    savingLaneConfig: false,
+    verifyingLane: false,
+    laneScanFilter: "all",
+    laneScanSort: "attention-first",
+    importingLanes: false,
+    clearStoredKeyRequested: false,
+    importPreviewMode: "",
   },
   handoff: {
     targets: [],
@@ -192,6 +200,38 @@ const elements = {
   trainingBackendList: document.getElementById("trainingBackendList"),
   wanTrainingStatus: document.getElementById("wanTrainingStatus"),
   helperContextTitle: document.getElementById("helperContextTitle"),
+  helperLaneSummary: document.getElementById("helperLaneSummary"),
+  helperLaneSelect: document.getElementById("helperLaneSelect"),
+  helperLaneLabelInput: document.getElementById("helperLaneLabelInput"),
+  helperLaneModeSelect: document.getElementById("helperLaneModeSelect"),
+  helperLaneProviderSelect: document.getElementById("helperLaneProviderSelect"),
+  helperLaneModelInput: document.getElementById("helperLaneModelInput"),
+  helperLaneBaseUrlInput: document.getElementById("helperLaneBaseUrlInput"),
+  helperLaneApiKeyInput: document.getElementById("helperLaneApiKeyInput"),
+  helperLaneApiKeyStatus: document.getElementById("helperLaneApiKeyStatus"),
+  helperLaneSeedModelButton: document.getElementById("helperLaneSeedModelButton"),
+  helperLaneFillBaseUrlButton: document.getElementById("helperLaneFillBaseUrlButton"),
+  helperLaneNewButton: document.getElementById("helperLaneNewButton"),
+  helperLaneVerifyButton: document.getElementById("helperLaneVerifyButton"),
+  helperLaneClearKeyButton: document.getElementById("helperLaneClearKeyButton"),
+  helperLaneExportButton: document.getElementById("helperLaneExportButton"),
+  helperLaneImportButton: document.getElementById("helperLaneImportButton"),
+  helperLaneSaveButton: document.getElementById("helperLaneSaveButton"),
+  helperLaneStatusNote: document.getElementById("helperLaneStatusNote"),
+  helperLaneList: document.getElementById("helperLaneList"),
+  helperLaneActivityList: document.getElementById("helperLaneActivityList"),
+  helperLaneFilterSelect: document.getElementById("helperLaneFilterSelect"),
+  helperLaneSortSelect: document.getElementById("helperLaneSortSelect"),
+  helperLaneTransferInput: document.getElementById("helperLaneTransferInput"),
+  helperLaneTransferInspector: document.getElementById("helperLaneTransferInspector"),
+  helperLaneTransferSavedAt: document.getElementById("helperLaneTransferSavedAt"),
+  helperLaneTransferSummary: document.getElementById("helperLaneTransferSummary"),
+  helperLaneTransferDetails: document.getElementById("helperLaneTransferDetails"),
+  helperLanePreviewMergeButton: document.getElementById("helperLanePreviewMergeButton"),
+  helperLanePreviewReplaceButton: document.getElementById("helperLanePreviewReplaceButton"),
+  helperLaneApplyImportButton: document.getElementById("helperLaneApplyImportButton"),
+  helperLaneRebaseTransferDraftButton: document.getElementById("helperLaneRebaseTransferDraftButton"),
+  helperLaneClearTransferDraftButton: document.getElementById("helperLaneClearTransferDraftButton"),
   helperMessages: document.getElementById("helperMessages"),
   helperQuickActions: document.getElementById("helperQuickActions"),
   helperInput: document.getElementById("helperInput"),
@@ -506,6 +546,25 @@ elements.helperInput.addEventListener("keydown", (event) => {
   }
 });
 
+const helperLaneModule = window.ChattyLoraHelperLanes;
+const helperLaneApi = helperLaneModule?.buildApi({
+  state,
+  elements,
+  escapeHtml,
+  escapeAttribute,
+  renderHelper,
+});
+
+helperLaneModule?.bind({
+  state,
+  elements,
+  escapeHtml,
+  escapeAttribute,
+  renderHelper,
+});
+
+helperLaneApi?.hydrateTransferDraft();
+
 void loadDashboard();
 void loadAvailableHandoffTargets();
 void loadBridgeInbox();
@@ -528,6 +587,7 @@ async function loadDashboard() {
 
     state.dashboard = await response.json();
     state.sources = state.dashboard.materials.source_registry.sources.map((source) => ({ ...source }));
+    helperLaneApi?.syncEditingLaneFromDashboard();
     seedBuilderForm();
     renderAll();
   } catch (error) {
@@ -659,6 +719,7 @@ function renderPage() {
 function renderHelper() {
   const contextTitle = helperContextTitle();
   elements.helperContextTitle.textContent = contextTitle;
+  helperLaneApi?.renderManager();
   renderHelperMessages();
   renderHelperQuickActions();
   elements.helperSendButton.disabled = state.helper.loading;
@@ -2420,6 +2481,9 @@ function renderHelperMessages() {
     .map((message) => `
       <article class="helper-message ${escapeAttribute(message.role)}">
         <div class="helper-message-meta">${message.role === "user" ? "You" : "Helper"}</div>
+        ${message.role === "assistant" && message.lane_label
+          ? `<p class="muted-copy">Lane: ${escapeHtml(message.lane_label)} (${escapeHtml(message.lane_mode || "local")})</p>`
+          : ""}
         <p>${escapeHtml(message.content)}</p>
         ${Array.isArray(message.suggestions) && message.suggestions.length
           ? `<ul class="helper-suggestions">${message.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ul>`
@@ -4741,6 +4805,8 @@ async function askHelper() {
       role: "assistant",
       content: `${payload.context_title} ${payload.answer}`,
       suggestions: payload.suggestions,
+      lane_label: payload.lane_label,
+      lane_mode: payload.lane_mode,
     });
   } catch (error) {
     console.error(error);

@@ -2,6 +2,7 @@ mod backend_registry;
 mod builder;
 mod datasets;
 mod helper;
+mod helper_lanes;
 mod lane_registry;
 mod model_registry;
 mod runner;
@@ -36,12 +37,13 @@ use types::{
     BaseModelOption, BridgeDatasetImportRequest, BuilderDeleteProjectRequest, BuilderPanel,
     BuilderPrepareRequest, DashboardResponse, DatasetCreateRequest, DatasetPreflightSummary,
     DatasetSummary, DatasetVideoSummary, DeleteTrainingOutputsRequest,
-    DeleteTrainingOutputsResponse, FolderSummary, HelperQueryRequest, LibraryItem,
-    LocalDatasetImportRequest, MaterialPanel, ModelFamilySummary, ModelItem, ModelSummary,
-    OpenLocalPathRequest, OpenLocalPathResponse, RuntimeSummary, SearchPreviewRequest,
-    SourceFixApplyPreviewRequest, SourceFixApplyRequest, SourceFixOpenRequest,
-    SourceFixProposalSaveRequest, SourceFixProposeRequest, SourceFixSaveRequest,
-    SourceRegistryUpdateRequest, SystemTelemetrySnapshot, TrainingRunRequest,
+    DeleteTrainingOutputsResponse, FolderSummary, HelperPanel, HelperLaneUpdateRequest,
+    HelperLaneVerifyRequest, HelperQueryRequest, LibraryItem, LocalDatasetImportRequest, MaterialPanel,
+    ModelFamilySummary, ModelItem, ModelSummary, OpenLocalPathRequest, OpenLocalPathResponse,
+    RuntimeSummary, SearchPreviewRequest, SourceFixApplyPreviewRequest, SourceFixApplyRequest,
+    SourceFixOpenRequest, SourceFixProposalSaveRequest, SourceFixProposeRequest,
+    SourceFixSaveRequest, SourceRegistryUpdateRequest, SystemTelemetrySnapshot,
+    TrainingRunRequest,
 };
 use walkdir::WalkDir;
 
@@ -94,6 +96,8 @@ async fn main() -> Result<()> {
         .route("/api/training/stop", post(stop_training_run))
         .route("/api/telemetry/system", get(system_telemetry_status))
         .route("/api/open-local-path", post(open_local_path))
+        .route("/api/helper/lanes/verify", post(verify_helper_lane))
+        .route("/api/helper/lanes", get(get_helper_lanes).post(save_helper_lanes))
         .route("/api/helper/query", post(query_helper))
         .route("/api/source-fix/open", post(open_source_fix_shell))
         .route("/api/source-fix/propose", post(propose_source_fix_shell))
@@ -540,8 +544,67 @@ async fn open_local_path(
     }
 }
 
-async fn query_helper(Json(request): Json<HelperQueryRequest>) -> impl IntoResponse {
-    Json(helper::answer(request)).into_response()
+async fn get_helper_lanes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match helper_lanes::load_registry_payload(&state.paths) {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn save_helper_lanes(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<HelperLaneUpdateRequest>,
+) -> impl IntoResponse {
+    match helper_lanes::save_registry(&state.paths, request) {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn verify_helper_lane(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<HelperLaneVerifyRequest>,
+) -> impl IntoResponse {
+    match helper_lanes::resolve_input_lane(request.lane) {
+        Ok(lane) => {
+            let response = helper::verify_lane(&state.http, &lane).await;
+            let _ = helper_lanes::record_verification_result(
+                &state.paths,
+                &response.lane_id,
+                &response.verification_status,
+                &response.verification_note,
+                response.last_verified_unix_seconds,
+            );
+            Json(response).into_response()
+        }
+        Err(error) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn query_helper(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<HelperQueryRequest>,
+) -> impl IntoResponse {
+    match helper_lanes::resolve_selected_lane(&state.paths) {
+        Ok(resolution) => Json(helper::answer(&state.http, request, &resolution).await).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn open_source_fix_shell(
@@ -635,6 +698,7 @@ fn build_dashboard(paths: &ProjectPaths) -> Result<DashboardResponse> {
     let runtime_summary = scan_runtime(paths);
     let source_registry = sources::load_registry_payload(paths)?;
     let site_fix_summaries = sources::site_fix_summaries(paths)?;
+    let helper_lane_registry = helper_lanes::load_registry_payload(paths)?;
     let curated_datasets = scan_curated_datasets(&paths.inputs)?;
     let recommended_dataset_slug = curated_datasets.first().map(|dataset| dataset.slug.clone());
     let prepared_projects = builder::scan_project_specs(paths)?;
@@ -739,6 +803,10 @@ fn build_dashboard(paths: &ProjectPaths) -> Result<DashboardResponse> {
                 "This sister tool is standalone and does not share live code paths with Chatty-art."
                     .to_string(),
             ],
+        },
+        helper: HelperPanel {
+            lane_registry: helper_lane_registry,
+            provider_catalog: helper::providers::catalog_payload(),
         },
     })
 }

@@ -1,20 +1,496 @@
-use crate::types::{
-    BuilderHelperContext, HelperQueryRequest, HelperQueryResponse, MaterialsHelperContext,
+pub(crate) mod providers;
+
+use anyhow::{Context, Result, bail};
+use reqwest::Client;
+use serde::Deserialize;
+
+use crate::{
+    helper::providers::normalized_base_url,
+    helper_lanes::HelperLaneResolution,
+    types::{
+        BuilderHelperContext, HelperLaneVerifyResponse, HelperQueryRequest, HelperQueryResponse,
+        MaterialsHelperContext,
+    },
 };
 
-pub fn answer(request: HelperQueryRequest) -> HelperQueryResponse {
+pub async fn answer(client: &Client, request: HelperQueryRequest, lane: &HelperLaneResolution) -> HelperQueryResponse {
+    let local = local_answer(
+        request,
+        &lane.lane_id,
+        &lane.lane_label,
+        &lane.lane_mode,
+        &lane.lane_status_note,
+    );
+
+    if !lane.supports_remote_inference || lane.lane_mode != "cloud" {
+        return local;
+    }
+
+    match lane.provider_kind.as_str() {
+        "openai" | "openai_compatible" | "xai" => match remote_chat_completions_answer(client, lane, &local).await {
+            Ok(answer) => HelperQueryResponse {
+                answer,
+                lane_status_note: format!(
+                    "{} Remote provider response succeeded for model {}.",
+                    lane.lane_status_note, lane.model_name
+                ),
+                ..local
+            },
+            Err(error) => HelperQueryResponse {
+                lane_status_note: format!(
+                    "{} Remote helper call failed and fell back to local guidance: {}",
+                    lane.lane_status_note, error
+                ),
+                ..local
+            },
+        },
+        "anthropic" => match remote_anthropic_messages_answer(client, lane, &local).await {
+            Ok(answer) => HelperQueryResponse {
+                answer,
+                lane_status_note: format!(
+                    "{} Remote provider response succeeded for model {}.",
+                    lane.lane_status_note, lane.model_name
+                ),
+                ..local
+            },
+            Err(error) => HelperQueryResponse {
+                lane_status_note: format!(
+                    "{} Remote helper call failed and fell back to local guidance: {}",
+                    lane.lane_status_note, error
+                ),
+                ..local
+            },
+        },
+        "gemini" => match remote_gemini_generate_content_answer(client, lane, &local).await {
+            Ok(answer) => HelperQueryResponse {
+                answer,
+                lane_status_note: format!(
+                    "{} Remote provider response succeeded for model {}.",
+                    lane.lane_status_note, lane.model_name
+                ),
+                ..local
+            },
+            Err(error) => HelperQueryResponse {
+                lane_status_note: format!(
+                    "{} Remote helper call failed and fell back to local guidance: {}",
+                    lane.lane_status_note, error
+                ),
+                ..local
+            },
+        },
+        _ => HelperQueryResponse {
+            lane_status_note: format!(
+                "{} Provider {} is not wired yet, so this answer came from the local helper core.",
+                lane.lane_status_note, lane.provider_kind
+            ),
+            ..local
+        },
+    }
+}
+
+pub async fn verify_lane(client: &Client, lane: &HelperLaneResolution) -> HelperLaneVerifyResponse {
+    match verify_lane_inner(client, lane).await {
+        Ok((note, last_verified_unix_seconds)) => HelperLaneVerifyResponse {
+            lane_id: lane.lane_id.clone(),
+            lane_label: lane.lane_label.clone(),
+            verification_status: "ready".to_string(),
+            verification_note: note,
+            last_verified_unix_seconds,
+        },
+        Err(error) => HelperLaneVerifyResponse {
+            lane_id: lane.lane_id.clone(),
+            lane_label: lane.lane_label.clone(),
+            verification_status: "failed".to_string(),
+            verification_note: format!("Lane verification failed: {}", error),
+            last_verified_unix_seconds: None,
+        },
+    }
+}
+
+pub fn local_answer(
+    request: HelperQueryRequest,
+    lane_id: &str,
+    lane_label: &str,
+    lane_mode: &str,
+    lane_status_note: &str,
+) -> HelperQueryResponse {
     let page = normalized_page(&request.page);
     let question = request.question.trim().to_string();
 
     match page {
-        "builder" => answer_builder(question, request.builder),
-        _ => answer_materials(question, request.materials),
+        "builder" => answer_builder(
+            question,
+            request.builder,
+            lane_id,
+            lane_label,
+            lane_mode,
+            lane_status_note,
+        ),
+        _ => answer_materials(
+            question,
+            request.materials,
+            lane_id,
+            lane_label,
+            lane_mode,
+            lane_status_note,
+        ),
     }
+}
+
+async fn remote_chat_completions_answer(
+    client: &Client,
+    lane: &HelperLaneResolution,
+    local: &HelperQueryResponse,
+) -> Result<String> {
+    remote_chat_completions_text(client, lane, &build_remote_prompt(local)).await
+}
+
+async fn remote_chat_completions_text(
+    client: &Client,
+    lane: &HelperLaneResolution,
+    prompt: &str,
+) -> Result<String> {
+    let api_key = lane
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("missing API key")?;
+    let model_name = lane.model_name.trim();
+    if model_name.is_empty() {
+        bail!("missing remote helper model name");
+    }
+
+    let base_url = normalized_base_url(&lane.provider_kind, lane.base_url.as_deref())?;
+    let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let payload = serde_json::json!({
+        "model": model_name,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are Chatty-lora's helper assistant. Keep answers practical, concise, and grounded in the supplied local app context. Do not imply cloud is required for LoRA training. If the local context suggests uncertainty, say so plainly."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.4
+    });
+
+    let response = client
+        .post(endpoint)
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await
+        .context("could not send remote helper request")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "remote provider did not return a readable error body".to_string());
+        bail!("provider returned {}: {}", status, truncate_for_note(&body, 220));
+    }
+
+    let payload = response
+        .json::<OpenAiChatCompletionsResponse>()
+        .await
+        .context("could not parse remote helper response")?;
+    let content = payload
+        .choices
+        .into_iter()
+        .find_map(|choice| choice.message.content)
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+        .context("remote helper response was empty")?;
+
+    Ok(content)
+}
+
+async fn remote_anthropic_messages_answer(
+    client: &Client,
+    lane: &HelperLaneResolution,
+    local: &HelperQueryResponse,
+) -> Result<String> {
+    remote_anthropic_messages_text(client, lane, &build_remote_prompt(local)).await
+}
+
+async fn remote_anthropic_messages_text(
+    client: &Client,
+    lane: &HelperLaneResolution,
+    prompt: &str,
+) -> Result<String> {
+    let api_key = lane
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("missing API key")?;
+    let model_name = lane.model_name.trim();
+    if model_name.is_empty() {
+        bail!("missing remote helper model name");
+    }
+
+    let base_url = lane
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("https://api.anthropic.com");
+    let endpoint = format!("{}/v1/messages", base_url.trim().trim_end_matches('/'));
+    let payload = serde_json::json!({
+        "model": model_name,
+        "max_tokens": 700,
+        "system": "You are Chatty-lora's helper assistant. Keep answers practical, concise, and grounded in the supplied local app context. Do not imply cloud is required for LoRA training. If the local context suggests uncertainty, say so plainly.",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    });
+
+    let response = client
+        .post(endpoint)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .context("could not send anthropic helper request")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "remote provider did not return a readable error body".to_string());
+        bail!("provider returned {}: {}", status, truncate_for_note(&body, 220));
+    }
+
+    let payload = response
+        .json::<AnthropicMessagesResponse>()
+        .await
+        .context("could not parse anthropic helper response")?;
+
+    let content = payload
+        .content
+        .into_iter()
+        .filter(|block| block.kind == "text")
+        .filter_map(|block| block.text)
+        .map(|text| text.trim().to_string())
+        .find(|text| !text.is_empty())
+        .context("anthropic helper response was empty")?;
+
+    Ok(content)
+}
+
+async fn remote_gemini_generate_content_answer(
+    client: &Client,
+    lane: &HelperLaneResolution,
+    local: &HelperQueryResponse,
+) -> Result<String> {
+    remote_gemini_generate_content_text(client, lane, &build_remote_prompt(local)).await
+}
+
+async fn remote_gemini_generate_content_text(
+    client: &Client,
+    lane: &HelperLaneResolution,
+    prompt: &str,
+) -> Result<String> {
+    let api_key = lane
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("missing API key")?;
+    let model_name = lane.model_name.trim();
+    if model_name.is_empty() {
+        bail!("missing remote helper model name");
+    }
+
+    let base_url = lane
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("https://generativelanguage.googleapis.com/v1beta");
+    let endpoint = format!(
+        "{}/models/{}:generateContent",
+        base_url.trim().trim_end_matches('/'),
+        model_name
+    );
+    let payload = serde_json::json!({
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": format!(
+                            "You are Chatty-lora's helper assistant. Keep answers practical, concise, and grounded in the supplied local app context. Do not imply cloud is required for LoRA training. If the local context suggests uncertainty, say so plainly.\n\n{}",
+                            prompt
+                        )
+                    }
+                ]
+            }
+        ]
+    });
+
+    let response = client
+        .post(endpoint)
+        .header("x-goog-api-key", api_key)
+        .header("content-type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .context("could not send gemini helper request")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "remote provider did not return a readable error body".to_string());
+        bail!("provider returned {}: {}", status, truncate_for_note(&body, 220));
+    }
+
+    let payload = response
+        .json::<GeminiGenerateContentResponse>()
+        .await
+        .context("could not parse gemini helper response")?;
+
+    let content = payload
+        .candidates
+        .into_iter()
+        .find_map(|candidate| candidate.content)
+        .into_iter()
+        .flat_map(|content| content.parts.into_iter())
+        .filter_map(|part| part.text)
+        .map(|text| text.trim().to_string())
+        .find(|text| !text.is_empty())
+        .context("gemini helper response was empty")?;
+
+    Ok(content)
+}
+
+fn build_remote_prompt(local: &HelperQueryResponse) -> String {
+    format!(
+        "Current helper lane: {} ({})\nLane note: {}\n\nPage: {}\nContext title: {}\n\nLocal guidance core:\n{}\n\nSuggestions:\n- {}\n\nRewrite that into one practical answer for the user. Keep it grounded in the same constraints, preserve the local-first training boundary, and avoid generic filler.",
+        local.lane_label,
+        local.lane_mode,
+        local.lane_status_note,
+        local.page,
+        local.context_title,
+        local.answer,
+        local.suggestions.join("\n- ")
+    )
+}
+
+async fn verify_lane_inner(client: &Client, lane: &HelperLaneResolution) -> Result<(String, Option<u64>)> {
+    if lane.lane_id == "local-rule-based" || lane.lane_mode == "local" {
+        return Ok((
+            "Local helper lane is ready offline. No remote provider check was needed."
+                .to_string(),
+            Some(unix_now()),
+        ));
+    }
+
+    if !lane.supports_remote_inference {
+        bail!("this cloud lane is not fully configured yet");
+    }
+
+    let prompt = "Reply with one short sentence confirming that the Chatty-lora helper lane is reachable.";
+    let reply = match lane.provider_kind.as_str() {
+        "openai" | "openai_compatible" | "xai" => remote_chat_completions_text(client, lane, prompt).await?,
+        "anthropic" => remote_anthropic_messages_text(client, lane, prompt).await?,
+        "gemini" => remote_gemini_generate_content_text(client, lane, prompt).await?,
+        other => bail!("provider {} is not wired for verification", other),
+    };
+
+    Ok((
+        format!(
+            "Remote helper lane responded successfully through provider {} using model {}. Sample reply: {}",
+            lane.provider_kind,
+            lane.model_name,
+            truncate_for_note(&reply, 120)
+        ),
+        Some(unix_now()),
+    ))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn truncate_for_note(value: &str, limit: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_string();
+    }
+    let shortened = trimmed.chars().take(limit).collect::<String>();
+    format!("{}...", shortened)
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatCompletionsResponse {
+    #[serde(default)]
+    choices: Vec<OpenAiChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatChoice {
+    message: OpenAiChatMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatMessage {
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicMessagesResponse {
+    #[serde(default)]
+    content: Vec<AnthropicContentBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiGenerateContentResponse {
+    #[serde(default)]
+    candidates: Vec<GeminiCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiContent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiContent {
+    #[serde(default)]
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiPart {
+    text: Option<String>,
 }
 
 fn answer_materials(
     question: String,
     context: Option<MaterialsHelperContext>,
+    lane_id: &str,
+    lane_label: &str,
+    lane_mode: &str,
+    lane_status_note: &str,
 ) -> HelperQueryResponse {
     let context = context.unwrap_or(MaterialsHelperContext {
         search_query: String::new(),
@@ -115,6 +591,10 @@ fn answer_materials(
         answer,
         context_title,
         suggestions,
+        lane_id: lane_id.to_string(),
+        lane_label: lane_label.to_string(),
+        lane_mode: lane_mode.to_string(),
+        lane_status_note: lane_status_note.to_string(),
     }
 }
 
@@ -133,7 +613,14 @@ fn media_kind_labels(media_kinds: &[String]) -> Vec<String> {
     labels
 }
 
-fn answer_builder(question: String, context: Option<BuilderHelperContext>) -> HelperQueryResponse {
+fn answer_builder(
+    question: String,
+    context: Option<BuilderHelperContext>,
+    lane_id: &str,
+    lane_label: &str,
+    lane_mode: &str,
+    lane_status_note: &str,
+) -> HelperQueryResponse {
     let context = context.unwrap_or(BuilderHelperContext {
         selected_dataset_slug: None,
         selected_dataset_file_count: None,
@@ -289,6 +776,10 @@ fn answer_builder(question: String, context: Option<BuilderHelperContext>) -> He
         answer,
         context_title,
         suggestions,
+        lane_id: lane_id.to_string(),
+        lane_label: lane_label.to_string(),
+        lane_mode: lane_mode.to_string(),
+        lane_status_note: lane_status_note.to_string(),
     }
 }
 

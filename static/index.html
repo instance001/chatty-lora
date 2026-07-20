@@ -663,6 +663,132 @@
           </div>
 
           <div class="note-panel helper-context">
+            <h3>Helper lane</h3>
+            <p id="helperLaneSummary">
+              Local and cloud helper lanes can sit side by side here without changing the core training workflow.
+            </p>
+          </div>
+
+          <div class="builder-settings-grid">
+            <label class="field-block compact">
+              <span class="field-title">Selected lane</span>
+              <select id="helperLaneSelect"></select>
+            </label>
+            <label class="field-block compact">
+              <span class="field-title">Display label</span>
+              <input id="helperLaneLabelInput" type="text" placeholder="e.g. OpenAI helper" />
+            </label>
+            <label class="field-block compact">
+              <span class="field-title">Lane mode</span>
+              <select id="helperLaneModeSelect">
+                <option value="local">Local</option>
+                <option value="cloud">Cloud</option>
+              </select>
+            </label>
+            <label class="field-block compact">
+              <span class="field-title">Provider</span>
+              <select id="helperLaneProviderSelect">
+                <option value="local_builtin">Local built-in</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai_compatible">OpenAI-compatible</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+                <option value="xai">xAI</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label class="field-block compact">
+              <span class="field-title">Model name</span>
+              <input id="helperLaneModelInput" type="text" placeholder="e.g. gpt-4.1-mini" />
+            </label>
+            <label class="field-block compact">
+              <span class="field-title">Base URL (optional)</span>
+              <input id="helperLaneBaseUrlInput" type="text" placeholder="https://api.example.com/v1" />
+            </label>
+            <label class="field-block compact">
+              <span class="field-title">API key</span>
+              <input id="helperLaneApiKeyInput" type="password" placeholder="Paste only for cloud lanes" />
+              <span class="field-help" id="helperLaneApiKeyStatus">Blank keeps the current stored key, if any.</span>
+            </label>
+          </div>
+
+          <div class="inline-actions compact helper-lane-editor-actions">
+            <button class="secondary-button" type="button" id="helperLaneSeedModelButton">Seed example model</button>
+            <button class="secondary-button" type="button" id="helperLaneFillBaseUrlButton">Fill default base URL</button>
+          </div>
+
+          <div class="inline-actions">
+            <button class="secondary-button" id="helperLaneNewButton">New cloud lane</button>
+            <button class="secondary-button" id="helperLaneVerifyButton">Verify lane</button>
+            <button class="secondary-button" id="helperLaneClearKeyButton">Clear saved key</button>
+            <button class="secondary-button" id="helperLaneExportButton">Export lanes</button>
+            <button class="secondary-button" id="helperLaneImportButton">Import lanes</button>
+            <button class="primary-button" id="helperLaneSaveButton">Save helper lanes</button>
+            <span class="inline-note" id="helperLaneStatusNote">Host-owned helper lane settings live in config/helper_lanes.json.</span>
+          </div>
+
+          <div class="note-panel helper-lane-scan">
+            <div class="section-heading-row">
+              <h3>Lane scan</h3>
+              <span class="section-note">Quick triage for helper readiness</span>
+            </div>
+            <div class="builder-settings-grid helper-lane-scan-controls">
+              <label class="field-block compact">
+                <span class="field-title">Filter</span>
+                <select id="helperLaneFilterSelect">
+                  <option value="all">All lanes</option>
+                  <option value="attention">Needs attention</option>
+                  <option value="verified">Verified only</option>
+                </select>
+              </label>
+              <label class="field-block compact">
+                <span class="field-title">Sort</span>
+                <select id="helperLaneSortSelect">
+                  <option value="attention-first">Attention first</option>
+                  <option value="recent-first">Recently verified</option>
+                  <option value="name">Name</option>
+                </select>
+              </label>
+            </div>
+            <div id="helperLaneList">
+              <p class="muted-copy">Helper lanes will appear here once the dashboard has loaded.</p>
+            </div>
+            <div class="helper-lane-activity">
+              <h4>Recent activity</h4>
+              <div id="helperLaneActivityList">
+                <p class="muted-copy">Recent helper lane events will appear here.</p>
+              </div>
+            </div>
+            <label class="field-block compact">
+              <span class="field-title">Transfer JSON</span>
+              <textarea
+                id="helperLaneTransferInput"
+                rows="6"
+                placeholder='Exported helper lane JSON lands here. You can also paste a saved export and click Import lanes.'
+              ></textarea>
+            </label>
+            <div class="helper-lane-transfer-inspector" id="helperLaneTransferInspector">
+              <div class="helper-lane-transfer-top">
+                <div>
+                  <strong>Transfer inspection</strong>
+                  <p class="muted-copy helper-lane-transfer-stamp" id="helperLaneTransferSavedAt">No saved transfer draft yet.</p>
+                </div>
+                <span class="inline-note" id="helperLaneTransferSummary">Paste or export helper lane JSON to inspect it.</span>
+              </div>
+              <div class="inline-actions compact helper-lane-transfer-actions">
+                <button class="secondary-button" type="button" id="helperLanePreviewMergeButton">Preview merge</button>
+                <button class="secondary-button" type="button" id="helperLanePreviewReplaceButton">Preview replace</button>
+                <button class="primary-button" type="button" id="helperLaneApplyImportButton">Apply import</button>
+                <button class="secondary-button" type="button" id="helperLaneRebaseTransferDraftButton">Rebase draft baseline</button>
+                <button class="secondary-button" type="button" id="helperLaneClearTransferDraftButton">Clear transfer draft</button>
+              </div>
+              <div class="helper-lane-transfer-details" id="helperLaneTransferDetails">
+                <p class="muted-copy">Schema version, export kind, lane count, and metadata preservation estimates will appear here.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="note-panel helper-context">
             <h3>Current context</h3>
             <p id="helperContextTitle">
               The helper will watch your current page and settings so it can answer with local context instead of generic filler.
@@ -720,6 +846,8 @@
     </div>
 
     <script src="/static/concept-stack.js?v=20260503-1"></script>
-    <script src="/static/app.js?v=20260503-2"></script>
-  </body>
-</html>
+    <script src="/static/helper-lane-providers.js?v=20260720-1"></script>
+    <script src="/static/helper-lanes.js?v=20260720-2"></script>
+    <script src="/static/app.js?v=20260720-2"></script>
+    </body>
+  </html>

@@ -14,6 +14,9 @@
 - Tightened the exploratory `Wan 14B` route around the only local variant that reached live training so far: BF16-loaded DiT weights, lower visible defaults, stronger WSL RAM+swap warnings, persisted per-run logs, and more explicit docs that this lane can still exceed a 32GB-class Windows box even after training starts.
 - Updated the `Wan 14B` docs to frame the lane more honestly: it now clearly says the route shows promise and can reach live training, but it was not validated end to end on the current 32GB test rig because system RAM plus WSL swap appear to be the real limiter. The docs now explicitly invite open-expectation testing and refinement from stronger hardware.
 - First scaffolded `AI Toolkit / Wan 2.2 TI2V 5B` groundwork: dedicated backend and lane registry entries, local Diffusers-bundle detection, base-model picker support, and generated handoff folders that prepare dataset JSONL and an initial AI Toolkit job scaffold without pretending the route is proven yet.
+- Parallel helper-lane groundwork for local assistants and BYO cloud providers, including provider-specific cloud lanes for `OpenAI`, `Anthropic`, `Google Gemini`, `Groq`, `OpenRouter`, and `xAI`.
+- Helper-lane verification, stored-key management, and transfer import/export review tooling with merge-versus-replace previews.
+- Drift-aware helper-lane transfer drafts that remember the saved local baseline and now support `Rebase draft baseline` without discarding pasted transfer JSON.
 
 ### Changed
 
@@ -22,6 +25,7 @@
 - Model storage now follows family-first buckets such as `models/wan/gguf/`, `models/wan/dependencies/`, `models/flux/gguf/`, and `models/ai_assistant/gguf/`.
 - Wan model-path detection now prefers the new family layout while still accepting the legacy `models/wan21_t2v_1_3b/` folder during transition.
 - Dashboard model summaries, Builder readouts, and backend cards now use the same family-based architecture instead of flat model-path assumptions.
+- Helper Chat docs now explain the lane-based split between local and cloud helpers, the BYO-key model, and the reviewed transfer/rebase workflow more explicitly.
 
 ## v0.1.0 - 2026-04-22
 

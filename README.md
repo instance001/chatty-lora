@@ -42,6 +42,8 @@ Chatty-lora currently focuses on the front half of the LoRA workflow:
 
 - `Helper Chat`
   - page-aware local guidance for both `Materials` and `Builder`
+  - parallel helper lanes for local GGUF assistants and BYO cloud providers
+  - lane verification, export/import review, and drift-aware transfer draft handling
 
 - `Scoped Site-Fix Shell`
   - inspect one source at a time
@@ -78,6 +80,33 @@ Under the hood, Chatty-lora now keeps this groundwork separate on purpose:
 - training lanes that connect a family to a backend and dataset kind
 
 That keeps the current Wan path simple while giving future Flux, audio, and non-Musubi routes somewhere clean to plug in.
+
+## Helper Lanes
+
+Chatty-lora's helper panel is now lane-based on purpose.
+
+There are two families that sit in parallel rather than being blended into one vague settings blob:
+
+- `Local lanes`
+  - use local assistant runtimes such as GGUF-backed helpers
+  - keep prompts, inference, and model selection on the local machine
+
+- `Cloud lanes`
+  - use your own API key with provider-specific lanes such as `OpenAI`, `Anthropic`, `Google Gemini`, `Groq`, `OpenRouter`, and `xAI`
+  - keep provider settings, model ids, and optional custom base URLs scoped to that one lane
+
+Those lanes only meet at the places where they actually should:
+- helper-lane verification
+- the active helper chat request path
+- import/export endpoints for reviewed lane transfer
+
+In plain language: local stays local when you want it to, cloud is there when you need it, and the app does not pretend those are the same thing internally.
+
+Helper-lane transfer is also review-first:
+- export writes lane JSON into the transfer box
+- import previews `merge` versus `replace` before applying
+- the saved transfer draft remembers when it was saved and what the local lane baseline looked like
+- if your local helper lanes changed since then, the inspector warns about drift and lets you `Rebase draft baseline` without losing the pasted JSON
 
 ## Design Principles
 

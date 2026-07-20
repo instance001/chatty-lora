@@ -108,3 +108,4 @@ release/
 *.dll
 *.exe
 *.pdb
+.tmp-*/

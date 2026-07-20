@@ -938,6 +938,101 @@ On `Builder`, it can help with things like:
 
 It is designed to be useful, not magical.
 
+### Helper Lanes In Plain Language
+
+The helper panel now runs through explicit `helper lanes`.
+
+Think of a lane as:
+- one named assistant route
+- one model/provider choice
+- one set of connection settings
+- one place to verify whether that route is actually usable
+
+There are two broad lane types:
+
+- `Local`
+  - meant for local assistant runtimes such as GGUF-backed helpers
+  - useful when you want the tool to stay self-contained on your own machine
+
+- `Cloud`
+  - meant for bring-your-own-key providers
+  - useful when you want a stronger hosted model for certain tasks without turning the whole app into a cloud-only tool
+
+The important design rule is:
+
+```text
+Local and cloud lanes sit side by side.
+They do not get merged into one settings soup.
+```
+
+That means each lane keeps its own:
+- provider
+- model id
+- optional base URL
+- connection mode
+- verification result
+
+### Cloud Providers And Keys
+
+Cloud helper lanes are provider-agnostic at the app level, but provider-specific at the lane level.
+
+Today that includes lanes such as:
+- `OpenAI`
+- `Anthropic`
+- `Google Gemini`
+- `Groq`
+- `OpenRouter`
+- `xAI`
+
+In practical terms, you can keep one lane for a local helper, another for an OpenAI model, another for xAI, and switch between them without pretending they are the same backend.
+
+Bring-your-own-key means:
+- you provide the API key for that lane
+- the lane stores and verifies its own key/settings
+- one cloud lane does not automatically overwrite or inherit another lane's credentials
+
+### Verifying A Lane
+
+`Verify lane` is the safety check.
+
+Use it after:
+- creating a new lane
+- changing provider or model
+- changing base URL
+- updating or clearing a stored key
+
+Verification is there to answer simple questions before you rely on the lane:
+- does this route connect?
+- is the key accepted?
+- does the provider respond at the configured endpoint?
+
+### Exporting, Importing, And Rebasing Lane Drafts
+
+Helper lanes also have a transfer box so you can move reviewed lane configs around intentionally.
+
+The transfer workflow is:
+
+1. `Export lanes` writes helper-lane JSON into the transfer box.
+2. Paste that JSON on another machine or browser.
+3. Review the transfer inspection summary.
+4. Choose `Preview merge` or `Preview replace`.
+5. Apply the import only after the preview looks right.
+
+The saved transfer draft remembers:
+- the pasted JSON
+- the selected preview mode
+- when the draft was saved
+- what the local helper-lane baseline looked like at that moment
+
+If your local helper lanes change later, the inspector can warn that the draft is now based on older local state.
+
+That does not mean the JSON is bad. It means:
+- stop
+- re-check the preview
+- then either import it as-is or click `Rebase draft baseline` if you intentionally want the warning cleared against the current local lane set
+
+`Rebase draft baseline` does not erase the pasted transfer JSON. It simply refreshes the saved local comparison point for that draft.
+
 ## Scoped Site-Fix Shell
 
 This is the more advanced maintenance area on the `Materials` page.
