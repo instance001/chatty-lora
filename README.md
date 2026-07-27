@@ -17,6 +17,34 @@ Chatty-lora is a local LoRA builder dashboard for:
 
 It remains a standalone sister tool to Chatty-art, but when both are hosted inside ChattyCog they can now exchange approved copy-only artifacts through mediated bridge lanes instead of sharing internal state directly.
 
+## LoRA Build Pipeline Map
+
+```mermaid
+flowchart TB
+    sources["Material sources<br/>public adapters, manual folders, Chatty-art candidates"] --> materials["Materials page<br/>search, browse, preview, selection tray"]
+    materials --> curate["Review-first curation<br/>copy chosen media into inputs/<dataset>"]
+    curate --> dataset["Curated dataset<br/>media buckets, sidecar captions, metadata.json"]
+
+    dataset --> builder["Builder page<br/>dataset + model family + backend target"]
+    models["models/<br/>Wan, Flux, assistant weights, dependencies"] --> builder
+    builder --> concept["Concept stack<br/>primary lesson, support details, guardrails"]
+    concept --> plan["Saved training plan<br/>config/projects/"]
+
+    plan --> handoff["Trainer handoff<br/>config/training/generated/"]
+    handoff --> scripts["Generated scripts<br/>preflight, cache latents, cache text, launch"]
+    scripts --> runner["App runner<br/>one saved Wan/Musubi job at a time"]
+    runner --> stages["Staged execution<br/>setup -> VAE cache -> T5 cache -> training"]
+    stages --> outputs["LoRA outputs<br/>outputs/training/<plan>/loras/"]
+
+    outputs --> return["Approved return handoff<br/>back to Chatty-art via ChattyCog"]
+    outputs --> cleanup["Explicit cleanup<br/>delete selected saved outputs"]
+
+    helper["Helper lanes<br/>local GGUF or BYO cloud guidance"] -.-> materials
+    helper -.-> builder
+    sitefix["Scoped site-fix shell<br/>adapter review + backup-first patch"] -.-> sources
+    runner -. ECG / logs .-> builder
+```
+
 ## What It Does Today
 
 Chatty-lora currently focuses on the front half of the LoRA workflow:
