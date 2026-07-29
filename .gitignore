@@ -90,6 +90,7 @@ release/
 *.log
 *.tmp
 *.cache
+tmp_dashboard.json
 *.safetensors
 *.ckpt
 *.pt

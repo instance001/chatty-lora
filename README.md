@@ -161,6 +161,8 @@ Helper-lane transfer is also review-first:
 
 ## Folder Layout
 
+Chatty-lora creates its working folders on first run. In a source checkout, the active app root is the repository root. In a packaged unzip-and-run release, the active app root is the folder beside the executable. Set `CHATTY_LORA_BASE_PATH` to force a different portable or shared location.
+
 - [`inputs/`](inputs/)
   Curated datasets live here.
 
@@ -192,6 +194,8 @@ From the project root:
 ```powershell
 cargo run
 ```
+
+The included `launch-chatty-lora.ps1` script changes into its own folder before launching, so it can be run from a shortcut without depending on the terminal's current directory.
 
 Chatty-lora starts on:
 

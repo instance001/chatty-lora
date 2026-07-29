@@ -37,13 +37,12 @@ use types::{
     BaseModelOption, BridgeDatasetImportRequest, BuilderDeleteProjectRequest, BuilderPanel,
     BuilderPrepareRequest, DashboardResponse, DatasetCreateRequest, DatasetPreflightSummary,
     DatasetSummary, DatasetVideoSummary, DeleteTrainingOutputsRequest,
-    DeleteTrainingOutputsResponse, FolderSummary, HelperPanel, HelperLaneUpdateRequest,
-    HelperLaneVerifyRequest, HelperQueryRequest, LibraryItem, LocalDatasetImportRequest, MaterialPanel,
+    DeleteTrainingOutputsResponse, FolderSummary, HelperLaneUpdateRequest, HelperLaneVerifyRequest,
+    HelperPanel, HelperQueryRequest, LibraryItem, LocalDatasetImportRequest, MaterialPanel,
     ModelFamilySummary, ModelItem, ModelSummary, OpenLocalPathRequest, OpenLocalPathResponse,
     RuntimeSummary, SearchPreviewRequest, SourceFixApplyPreviewRequest, SourceFixApplyRequest,
     SourceFixOpenRequest, SourceFixProposalSaveRequest, SourceFixProposeRequest,
-    SourceFixSaveRequest, SourceRegistryUpdateRequest, SystemTelemetrySnapshot,
-    TrainingRunRequest,
+    SourceFixSaveRequest, SourceRegistryUpdateRequest, SystemTelemetrySnapshot, TrainingRunRequest,
 };
 use walkdir::WalkDir;
 
@@ -51,21 +50,8 @@ use walkdir::WalkDir;
 async fn main() -> Result<()> {
     init_tracing();
 
-    let root = std::env::current_dir().context("could not determine project root")?;
-    let paths = ProjectPaths {
-        inputs: root.join("inputs"),
-        outputs: root.join("outputs"),
-        models: root.join("models"),
-        runtime: root.join("runtime"),
-        defaults: root.join("defaults"),
-        config: root.join("config"),
-        project_specs: root.join("config").join("projects"),
-        training_config: root.join("config").join("training"),
-        training_generated: root.join("config").join("training").join("generated"),
-        training_outputs: root.join("outputs").join("training"),
-        site_fix_notes: root.join("config").join("source-fixes"),
-        root,
-    };
+    let paths = ProjectPaths::resolve()?;
+    let static_dir = paths.root.join("static");
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
@@ -88,7 +74,10 @@ async fn main() -> Result<()> {
         .route("/api/datasets/create", post(create_dataset))
         .route("/api/datasets/import-local", post(import_local_dataset))
         .route("/api/datasets/import-bridge", post(import_bridge_dataset))
-        .route("/api/training/outputs/delete", post(delete_training_outputs))
+        .route(
+            "/api/training/outputs/delete",
+            post(delete_training_outputs),
+        )
         .route("/api/builder/prepare", post(prepare_builder_project))
         .route("/api/builder/delete", post(delete_builder_project))
         .route("/api/training/status", get(get_training_status))
@@ -97,7 +86,10 @@ async fn main() -> Result<()> {
         .route("/api/telemetry/system", get(system_telemetry_status))
         .route("/api/open-local-path", post(open_local_path))
         .route("/api/helper/lanes/verify", post(verify_helper_lane))
-        .route("/api/helper/lanes", get(get_helper_lanes).post(save_helper_lanes))
+        .route(
+            "/api/helper/lanes",
+            get(get_helper_lanes).post(save_helper_lanes),
+        )
         .route("/api/helper/query", post(query_helper))
         .route("/api/source-fix/open", post(open_source_fix_shell))
         .route("/api/source-fix/propose", post(propose_source_fix_shell))
@@ -112,7 +104,7 @@ async fn main() -> Result<()> {
         .route("/api/source-fix/apply", post(apply_source_fix))
         .route("/api/source-fix/save", post(save_source_fix_shell))
         .route("/", get(index))
-        .nest_service("/static", ServeDir::new("static"))
+        .nest_service("/static", ServeDir::new(static_dir))
         .fallback(get(index))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -598,7 +590,9 @@ async fn query_helper(
     Json(request): Json<HelperQueryRequest>,
 ) -> impl IntoResponse {
     match helper_lanes::resolve_selected_lane(&state.paths) {
-        Ok(resolution) => Json(helper::answer(&state.http, request, &resolution).await).into_response(),
+        Ok(resolution) => {
+            Json(helper::answer(&state.http, request, &resolution).await).into_response()
+        }
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error.to_string() })),
@@ -1568,7 +1562,10 @@ fn delete_training_output_files(
             .canonicalize()
             .with_context(|| format!("could not resolve {}", candidate.display()))?;
         if !resolved.starts_with(&outputs_root) {
-            bail!("training output path escapes outputs/training/: {}", relative);
+            bail!(
+                "training output path escapes outputs/training/: {}",
+                relative
+            );
         }
         if !resolved.is_file() {
             bail!("training output file was not found: {}", relative);

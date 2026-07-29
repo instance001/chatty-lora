@@ -60,6 +60,8 @@ The app expects these folders:
 - [`runtime/`](runtime/)
 - [`config/`](config/)
 
+Chatty-lora creates these folders on first run. In a source checkout they live in the repo root. In a packaged unzip-and-run release they live beside the executable. Advanced users can set `CHATTY_LORA_BASE_PATH` to force another portable or shared location.
+
 You do not need to understand every folder to use the app.
 
 The most important ones are:
