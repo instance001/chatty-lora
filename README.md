@@ -17,6 +17,16 @@ Chatty-lora is a local LoRA builder dashboard for:
 
 It remains a standalone sister tool to Chatty-art, but when both are hosted inside ChattyCog they can now exchange approved copy-only artifacts through mediated bridge lanes instead of sharing internal state directly.
 
+## Screenshots
+
+![Chatty-lora main workspace](<./assets/Screenshot 2026-07-30 130918.png>)
+
+| Workflow views | Training views |
+| --- | --- |
+| ![Chatty-lora materials search](<./assets/Screenshot 2026-07-30 130933.png>) | ![Chatty-lora builder setup](<./assets/Screenshot 2026-07-30 130953.png>) |
+| ![Chatty-lora dataset curation](<./assets/Screenshot 2026-07-30 131031.png>) | ![Chatty-lora training plan](<./assets/Screenshot 2026-07-30 131100.png>) |
+| ![Chatty-lora helper lanes](<./assets/Screenshot 2026-07-30 131118.png>) | ![Chatty-lora output handoff](<./assets/Screenshot 2026-07-30 131257.png>) |
+
 ## LoRA Build Pipeline Map
 
 ```mermaid
