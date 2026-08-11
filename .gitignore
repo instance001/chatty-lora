@@ -87,6 +87,10 @@ runtime/*
 !runtime/README.md
 dist/
 release/
+!release/
+release/*
+!release/windows/
+!release/windows/**
 *.log
 *.tmp
 *.cache
@@ -108,5 +112,6 @@ tmp_dashboard.json
 *.mp3
 *.dll
 *.exe
+!release/windows/*.exe
 *.pdb
 .tmp-*/
