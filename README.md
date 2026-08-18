@@ -384,7 +384,7 @@ These settings shape the generated training plan. They are not magic quality sli
 - `Block role`: marks whether that block is the primary lesson, a supporting detail, or an avoid guardrail.
 - `Trigger term`: the short distinct handle you will use later to call the LoRA concept.
 - `Training intent`: a plain-language note about what that one block should teach.
-- `Training preset`: chooses a starter personality for the run. Use `Balanced starter` until you have a reason not to.
+- `Training preset`: chooses a starter profile for the run. Use `Balanced starter` until you have a reason not to.
 - `Trigger phrase`: the rare phrase you will later type in prompts to call the LoRA concept.
 - `Concept summary`: the plain-language target. This is where you say what should stay consistent.
 - `Caption strategy`: controls where file descriptions come from. Better captions usually help, but tiny tests can start with filenames/source titles.
