@@ -1,0 +1,6 @@
+cff-version: 1.2.0
+message: "If this repository informed your work, please cite the canonical repository."
+title: "chatty-lora"
+url: "https://github.com/instance001/chatty-lora"
+repository-code: "https://github.com/instance001/chatty-lora"
+abstract: "Repository-level citation metadata; see PROVENANCE.md for evidence limits."
