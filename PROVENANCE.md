@@ -32,3 +32,9 @@ GitHub API licence field at inventory time: `AGPL-3.0`. This is a metadata obser
 ## Evidence and limitations
 
 Evidence: authenticated GitHub API metadata captured by the FMI provenance audit. Contribution, prior art, ownership, contributors, document licensing, relationships, releases, and publication status require human verification.
+
+## Evidence-led lineage position
+
+The README supports an `IMPLEMENTED` local LoRA workflow application: review-first material intake and curation, explicit training-plan/config generation, staged backend handoff and execution, logged outputs, deliberate cleanup, and an optional helper lane. The documented Chatty-art relationship is a sister-tool workflow in which selected candidates and trained outputs move through approved, copy-only ChattyCog bridge lanes rather than a shared internal state model.
+
+This record does not claim that LoRA training, dataset curation, model hosting, training scripts, or media-generation pipelines are FMI-originated. It also does not establish performance, rights clearance for arbitrary training material, or a claim that external adapter/backend components are FMI work.
